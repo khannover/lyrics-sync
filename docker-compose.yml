@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  lyric-sync:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - model-cache:/app/models
+      - /tmp/lyric-sync:/tmp/lyric-sync
+    environment:
+      - MODEL_SIZE=base
+    restart: unless-stopped
+
+volumes:
+  model-cache:

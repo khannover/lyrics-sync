@@ -1,0 +1,9 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+mutagen==1.47.0
+numpy==1.26.4
+librosa==0.10.2.post1
+soundfile==0.12.1
+faster-whisper==1.1.0
+dtw-python==1.5.3
