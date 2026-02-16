@@ -1,0 +1,25 @@
+# Git
+.git
+.gitignore
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.env
+.venv
+venv/
+env/
+
+# Docker
+Dockerfile
+.dockerignore
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Large data/models (if you are downloading them during build)
+# Only ignore these if they are already in /app/models inside the container
+# models/
