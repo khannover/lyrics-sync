@@ -8,8 +8,8 @@
         * { box-sizing: border-box; }
         body { background: var(--dark); color: white; font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; margin: 0; height: 100vh; overflow: hidden; }
 
-        .dashboard { background: #151515; padding: 20px; width: 90%; max-width: 900px; border-bottom: 2px solid var(--orange); display: flex; flex-wrap: wrap; gap: 15px; margin-top: 10px; z-index: 100; }
-        .control-group { display: flex; flex-direction: column; flex: 1; min-width: 200px; }
+        .dashboard { background: #151515; padding: 18px 18px 14px; width: 95%; max-width: 500px; border-bottom: 2px solid var(--orange); display: flex; flex-direction: column; gap: 12px; margin-top: 10px; z-index: 100; box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
+        .control-group { display: flex; flex-direction: column; flex: 1; min-width: 230px; }
         label { color: var(--orange); font-size: 0.7rem; text-transform: uppercase; margin-bottom: 5px; letter-spacing: 1px; }
         input[type="file"] { background: #222; color: #888; border: 1px solid #333; padding: 5px; border-radius: 4px; }
 
@@ -18,17 +18,23 @@
         button:hover { background: #ffaa33; transform: scale(1.03); }
         button:disabled { background: #555; color: #888; cursor: not-allowed; transform: none; }
 
-        .status-bar { width: 90%; max-width: 900px; padding: 8px 15px; font-size: 0.75rem; color: #888; background: #111; border-bottom: 1px solid #222; min-height: 30px; display: flex; align-items: center; gap: 10px; }
+        .choice-row { display: flex; gap: 12px; align-items: center; margin: 4px 0 8px; }
+        .inline-row { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; }
+        .choice-row label { color: #ccc; font-size: 0.8rem; text-transform: none; letter-spacing: 0; }
+        .lyrics-textarea { width: 100%; min-height: 120px; background: #1c1c1c; color: #f2f2f2; border: 1px solid #333; border-radius: 4px; padding: 10px; resize: vertical; font-family: 'Segoe UI', sans-serif; }
+        .hidden { display: none; }
+
+        .status-bar { margin-top: 30px; width: 95%; max-width: 500px; padding: 8px 15px; font-size: 0.75rem; color: #888; background: #111; border-bottom: 1px solid #222; min-height: 30px; display: flex; align-items: center; gap: 10px; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }
         .status-bar .spinner { width: 14px; height: 14px; border: 2px solid #555; border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; display: none; }
         .status-bar.loading .spinner { display: inline-block; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        .tabs { display: flex; gap: 0; width: 90%; max-width: 900px; }
+        .tabs { display: flex; gap: 0; width: 100%; }
         .tab { padding: 8px 20px; background: #1a1a1a; color: #666; cursor: pointer; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; border-bottom: 2px solid transparent; transition: all 0.2s; }
         .tab.active { color: var(--orange); border-bottom-color: var(--orange); background: #151515; }
 
         .tab-content { display: none; }
-        .tab-content.active { display: flex; flex-wrap: wrap; gap: 15px; width: 100%; }
+        .tab-content.active { display: flex; flex-direction: column; gap: 12px; width: 100%; }
 
         #lyrics-window { flex-grow: 1; width: 100%; overflow-y: auto; scroll-behavior: smooth; text-align: center; mask-image: linear-gradient(transparent, black 35%, black 65%, transparent); -webkit-mask-image: linear-gradient(transparent, black 35%, black 65%, transparent); }
         #lyrics-content { padding: 20vh 0; }
@@ -38,28 +44,30 @@
 
         .player-container { width: 100%; background: #111; padding: 10px 0; display: flex; justify-content: center; }
         audio { width: 80%; max-width: 800px; filter: invert(100%) hue-rotate(180deg) brightness(1.5); }
+        #tab-auto { margin-top: 20px; }
     </style>
 </head>
 <body>
     <div class="dashboard">
-        <!-- Tab switcher -->
-        <div class="tabs" style="width: 100%; margin-bottom: 5px;">
-            <div class="tab active" data-tab="auto">⚡ Auto-Sync (API)</div>
-            <div class="tab" data-tab="manual">📂 Manual (Local Files)</div>
-        </div>
-
         <!-- Tab 1: Auto-sync via API -->
         <div class="tab-content active" id="tab-auto">
-            <div class="control-group">
-                <label>1. Select Audio (.mp3)</label>
-                <input type="file" id="auto-audio" accept=".mp3,audio/mpeg">
-            </div>
-            <div class="control-group">
-                <label>2. Select Lyrics (.txt)</label>
-                <input type="file" id="auto-lyrics" accept=".txt,text/plain">
-            </div>
-            <div class="btn-row">
-                <button id="btn-sync" disabled>🔄 Sync Lyrics</button>
+            <div class="inline-row">
+                <div class="control-group">
+                    <label>1. Select Audio (.mp3)</label>
+                    <input type="file" id="auto-audio" accept=".mp3,audio/mpeg">
+                </div>
+                <div class="control-group">
+                    <label>2. Lyrics Source</label>
+                    <div class="choice-row">
+                        <label><input type="radio" name="lyrics-source" value="file" checked> Upload file</label>
+                        <label><input type="radio" name="lyrics-source" value="text"> Paste text</label>
+                    </div>
+                    <input type="file" id="auto-lyrics-file" accept=".txt,text/plain">
+                    <textarea id="auto-lyrics-text" class="lyrics-textarea hidden" placeholder="Paste lyrics here..."></textarea>
+                </div>
+                <div class="control-group">
+                    <button id="btn-sync" disabled>🔄 Sync Lyrics</button>
+                </div>
             </div>
         </div>
 
@@ -70,8 +78,8 @@
                 <input type="file" id="manual-audio" accept=".mp3,audio/mpeg">
             </div>
             <div class="control-group">
-                <label>2. Select Sync Data (.lrc)</label>
-                <input type="file" id="manual-lrc" accept=".lrc,.txt">
+                <label>2. Paste Sync Data (LRC text)</label>
+                <textarea id="manual-lrc-text" class="lyrics-textarea" placeholder="Paste LRC content here..."></textarea>
             </div>
         </div>
     </div>
@@ -99,9 +107,11 @@
         const btnSync   = document.getElementById('btn-sync');
 
         const autoAudio   = document.getElementById('auto-audio');
-        const autoLyrics  = document.getElementById('auto-lyrics');
+        const autoLyricsFile = document.getElementById('auto-lyrics-file');
+        const autoLyricsText = document.getElementById('auto-lyrics-text');
+        const lyricsSource = document.querySelectorAll('input[name="lyrics-source"]');
         const manualAudio = document.getElementById('manual-audio');
-        const manualLrc   = document.getElementById('manual-lrc');
+        const manualLrcText = document.getElementById('manual-lrc-text');
 
         let syncMap = [];
 
@@ -122,17 +132,37 @@
         }
 
         // ─── Enable sync button when both files selected ───
+        let lyricsMode = 'file';
+
         function checkAutoReady() {
-            btnSync.disabled = !(autoAudio.files.length && autoLyrics.files.length);
+            const hasLyrics = lyricsMode === 'file'
+                ? autoLyricsFile.files.length > 0
+                : autoLyricsText.value.trim().length > 0;
+            btnSync.disabled = !(autoAudio.files.length && hasLyrics);
         }
         autoAudio.addEventListener('change', checkAutoReady);
-        autoLyrics.addEventListener('change', checkAutoReady);
+        autoLyricsFile.addEventListener('change', checkAutoReady);
+        autoLyricsText.addEventListener('input', checkAutoReady);
+
+        lyricsSource.forEach(radio => {
+            radio.addEventListener('change', () => {
+                lyricsMode = radio.value;
+                const usingFile = lyricsMode === 'file';
+                autoLyricsFile.classList.toggle('hidden', !usingFile);
+                autoLyricsText.classList.toggle('hidden', usingFile);
+                if (usingFile) autoLyricsText.value = '';
+                else autoLyricsFile.value = '';
+                checkAutoReady();
+            });
+        });
 
         // ─── AUTO-SYNC: Call the API ───
         btnSync.addEventListener('click', async () => {
             const mp3File = autoAudio.files[0];
-            const lyrFile = autoLyrics.files[0];
-            if (!mp3File || !lyrFile) return;
+            const lyricPayload = lyricsMode === 'file'
+                ? autoLyricsFile.files[0]
+                : new Blob([autoLyricsText.value], { type: 'text/plain' });
+            if (!mp3File || !lyricPayload) return;
 
             btnSync.disabled = true;
             setStatus('Uploading and syncing… this may take a minute.', true);
@@ -140,7 +170,7 @@
             try {
                 const form = new FormData();
                 form.append('mp3', mp3File);
-                form.append('lyrics', lyrFile);
+                form.append('lyrics', lyricPayload, lyricsMode === 'file' ? lyricPayload.name || 'lyrics.txt' : 'lyrics.txt');
 
                 const resp = await fetch('/sync', { method: 'POST', body: form });
 
@@ -189,19 +219,20 @@
             const file = e.target.files[0];
             if (file) {
                 player.src = URL.createObjectURL(file);
-                setStatus('Audio loaded. Now load an LRC file.', false);
+                setStatus('Audio loaded. Paste LRC text next.', false);
             }
         });
 
-        manualLrc.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                parseLrc(ev.target.result);
-                setStatus(`✅ LRC loaded: ${syncMap.length} lines. Press play.`, false);
-            };
-            reader.readAsText(file);
+        manualLrcText.addEventListener('input', (e) => {
+            const text = e.target.value;
+            if (!text.trim()) {
+                setStatus('Awaiting LRC text…', false);
+                syncMap = [];
+                content.innerHTML = '<div class="lyric-line active">Waiting for LRC text...</div>';
+                return;
+            }
+            parseLrc(text);
+            setStatus(`✅ LRC text loaded: ${syncMap.length} lines. Press play.`, false);
         });
 
         // ─── LRC Parser ───
