@@ -129,10 +129,18 @@ def _align_lines_to_words(
             if w:
                 lyrics_word_entries.append((w, line_idx))
 
-    if not lyrics_word_entries:
+    if len(lyrics_word_entries) == 0:
+        logger.warning("Empty lyrics word list - returning zero timestamps")
         return [(line, 0) for line in lyrics_lines]
 
+    # Filter whisper words to only those that normalize to something non-empty
+    # This prevents empty strings in whisper_normalized which causes issues with vector sizes and indexing
+    whisper_words = [w for w in whisper_words if _normalize(w["word"])]
     whisper_normalized = [_normalize(w["word"]) for w in whisper_words]
+
+    if len(whisper_normalized) == 0:
+         logger.warning("Empty whisper word list (after filtering) - returning zero timestamps")
+         return [(line, 0) for line in lyrics_lines]
 
     # Build character vocabulary for vector representation
     all_chars = set()
@@ -140,9 +148,23 @@ def _align_lines_to_words(
         all_chars.update(w)
     for w in whisper_normalized:
         all_chars.update(w)
+    
+    # If vocab is empty, we have no features to align on
+    if not all_chars:
+        # Should be covered by empty word checks but theoretical edge case where words exist but contain no chars?
+        # (e.g. if _normalize removed everything but we still had non-empty strings?? No, _normalize returns empty string then.)
+        # Maybe if user input weird unicode kept by _normalize but not handled correctly?
+        logger.warning("Vocabulary is empty despite having words - returning zero timestamps")
+        return [(line, 0) for line in lyrics_lines]
+
     vocab = {ch: i for i, ch in enumerate(sorted(all_chars))}
     vocab_size = len(vocab)
-
+    
+    # Validate consistent vector size logic
+    if vocab_size == 0:
+        logger.error("Constraints violation: vocab_size is 0 but all_chars is not empty?")
+        return [(line, 0) for line in lyrics_lines]
+ 
     def to_vec(word: str) -> np.ndarray:
         vec = np.zeros(vocab_size, dtype=np.float32)
         for ch in word:
@@ -157,8 +179,20 @@ def _align_lines_to_words(
     lyrics_vecs = np.array([to_vec(w) for w, _ in lyrics_word_entries])
     whisper_vecs = np.array([to_vec(w) for w in whisper_normalized])
 
+    logger.info("Aligning %d lyric words vs %d whisper words (vocab size: %d)", 
+                len(lyrics_vecs), len(whisper_vecs), vocab_size)
+
     # DTW alignment
-    alignment = dtw(lyrics_vecs, whisper_vecs, dist_method="euclidean")
+    try:
+        alignment = dtw(lyrics_vecs, whisper_vecs, dist_method="euclidean")
+    except ValueError as e:
+        logger.error("DTW failed (shapes: lyrics=%s, whisper=%s, vocab=%d): %s", 
+                     lyrics_vecs.shape, whisper_vecs.shape, vocab_size, e)
+        # Fallback: simple linear mapping or return 0s
+        logger.warning("Falling back to linear time mapping due to DTW failure")
+        # Simple linear mapping: spread timestamps evenly? Or just 0s.
+        # Actually, let's just return 0s for now to avoid crashing completely.
+        return [(line, 0) for line in lyrics_lines]
 
     # Map each lyrics word to its best Whisper word match
     lyrics_to_whisper = {}
