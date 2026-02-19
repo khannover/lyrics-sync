@@ -15,6 +15,7 @@ from typing import List, Tuple
 
 import numpy as np
 from dtw import dtw
+from scipy.spatial.distance import cdist
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +47,68 @@ def _get_model():
     global _model
     if _model is None:
         from faster_whisper import WhisperModel
+        from huggingface_hub import model_info
+        
+        # Determine the model ID based on size (Systran/faster-whisper-{size})
+        # This matches what faster-whisper uses internally for default models
+        repo_id = f"Systran/faster-whisper-{MODEL_SIZE}"
 
         logger.info("Loading whisper model '%s' ...", MODEL_SIZE)
-        _model = WhisperModel(
-            MODEL_SIZE,
-            device="cpu",
-            compute_type="int8",
-            download_root=str(MODEL_DIR),
-        )
-        logger.info("Model loaded.")
+        
+        # 1. Try to load locally first (strictly)
+        try:
+            _model = WhisperModel(
+                MODEL_SIZE,
+                device="cpu",
+                compute_type="int8",
+                download_root=str(MODEL_DIR),
+                local_files_only=True,
+            )
+            logger.info("Model loaded from local cache.")
+            
+            # 2. Check for updates (best effort, don't block or fail if offline)
+            try:
+                # faster-whisper (via huggingface_hub v0.x) caching structure:
+                # models--Systran--faster-whisper-{size}/refs/main
+                # which contains the current commit hash.
+                
+                # Sanitize repo_id for path construction (replace / with --)
+                cache_dir_name = f"models--{repo_id.replace('/', '--')}"
+                ref_path = MODEL_DIR / cache_dir_name / "refs" / "main"
+                
+                local_sha = None
+                if ref_path.exists():
+                    local_sha = ref_path.read_text().strip()
+                
+                info = model_info(repo_id)
+                remote_sha = info.sha
+                
+                if local_sha and remote_sha != local_sha:
+                    logger.warning(
+                        "Model update available! Local: %s, Remote: %s. "
+                        "Delete the '%s' directory (or the specific model cache) to update.",
+                        local_sha, remote_sha, str(MODEL_DIR)
+                    )
+                elif local_sha:
+                    logger.info("Local model is up-to-date (SHA: %s)", local_sha)
+                else:
+                    logger.info("Remote SHA: %s. (Could not determine local SHA)", remote_sha)
+                
+            except Exception as e:
+                logger.warning("Could not check for model updates: %s", e)
+
+        except Exception:
+            # Local loading failed (not present?), so we MUST download.
+            logger.info("Local model not found. Downloading from HuggingFace...")
+            _model = WhisperModel(
+                MODEL_SIZE,
+                device="cpu",
+                compute_type="int8",
+                download_root=str(MODEL_DIR),
+                local_files_only=False, 
+            )
+            logger.info("Model downloaded and loaded.")
+
     return _model
 
 
@@ -176,15 +230,25 @@ def _align_lines_to_words(
             vec /= norm
         return vec
 
-    lyrics_vecs = np.array([to_vec(w) for w, _ in lyrics_word_entries])
-    whisper_vecs = np.array([to_vec(w) for w in whisper_normalized])
+    # Ensure float32 and 2D shapes
+    lyrics_vecs = np.array([to_vec(w) for w, _ in lyrics_word_entries], dtype=np.float32)
+    whisper_vecs = np.array([to_vec(w) for w in whisper_normalized], dtype=np.float32)
 
-    logger.info("Aligning %d lyric words vs %d whisper words (vocab size: %d)", 
-                len(lyrics_vecs), len(whisper_vecs), vocab_size)
+    # Ensure 2D (N, D) - though logic above should ensure this, explicit check helps
+    if lyrics_vecs.ndim == 1: lyrics_vecs = lyrics_vecs.reshape(1, -1)
+    if whisper_vecs.ndim == 1: whisper_vecs = whisper_vecs.reshape(1, -1)
+
+    logger.info("Aligning %d lyric words vs %d whisper words (vocab size: %d, shapes: %s, %s)", 
+                len(lyrics_vecs), len(whisper_vecs), vocab_size, lyrics_vecs.shape, whisper_vecs.shape)
 
     # DTW alignment
     try:
-        alignment = dtw(lyrics_vecs, whisper_vecs, dist_method="euclidean")
+        # Step pattern 'symmetric2' is standard. 'euclidean' computes dist matrix internally.
+        # However, dtw-python automatically transposes 1D input (frames=1, features=M) to (M, 1),
+        # which breaks when comparing (1, M) vs (N, M).
+        # We manually compute the distance matrix to avoid this heuristic.
+        dist_matrix = cdist(lyrics_vecs, whisper_vecs, metric="euclidean")
+        alignment = dtw(dist_matrix, step_pattern="symmetric2")
     except ValueError as e:
         logger.error("DTW failed (shapes: lyrics=%s, whisper=%s, vocab=%d): %s", 
                      lyrics_vecs.shape, whisper_vecs.shape, vocab_size, e)
