@@ -130,18 +130,66 @@ def _normalize(text: str) -> str:
     return re.sub(r"[^\w\s]", "", text.lower()).strip()
 
 
-def _transcribe_with_word_timestamps(wav_path: str) -> List[dict]:
+def _is_marker(text: str) -> bool:
+    """Check if a line is just a metadata marker like [Chorus] or Verse 1:"""
+    clean = text.strip()
+    if not clean:
+        return False
+    # Lines in brackets: [Verse], (Chorus), etc.
+    if (clean.startswith("[") and clean.endswith("]")) or (clean.startswith("(") and clean.endswith(")")):
+        return True
+    # Lines ending with colon and have 1-2 words: "Verse 1:", "Outro:"
+    if clean.endswith(":") and len(clean.split()) <= 2:
+        return True
+    return False
+
+
+def _transcribe_with_word_timestamps(wav_path: str, lyrics_text: str = None) -> List[dict]:
     """
     Transcribe audio with word-level timestamps using faster-whisper.
     Returns: [{"word": "hello", "start": 0.0, "end": 0.52}, ...]
     """
     model = _get_model()
 
+    # 1. Detect language hint from lyrics text
+    # This prevents Whisper from getting stuck in a wrong language (e.g. Khmer)
+    # for songs with instrumental intros or poor quality.
+    language = None
+    if lyrics_text:
+        lower_lyrics = lyrics_text.lower()
+        # Common word checks for language hinting
+        if any(w in lower_lyrics for w in [" the ", " and ", " you ", " are ", " this "]):
+            language = "en"
+        elif any(w in lower_lyrics for w in [" que ", " el ", " la ", " con ", " los "]):
+            language = "es"
+        elif any(w in lower_lyrics for w in [" der ", " die ", " das ", " und ", " ist "]):
+            language = "de"
+        elif any(w in lower_lyrics for w in [" le ", " la ", " et ", " les ", " une "]):
+            language = "fr"
+        elif any(w in lower_lyrics for w in [" che ", " il ", " la ", " un ", " non "]):
+            language = "it"
+        elif any(w in lower_lyrics for w in [" que ", " o ", " a ", " e ", " com "]):
+            language = "pt"
+
+    # 2. Create initial prompt from first few lines of lyrics
+    # This helps Whisper with context and reinforces the language choice.
+    initial_prompt = None
+    if lyrics_text:
+        prompt_lines = [l.strip() for l in lyrics_text.splitlines() if l.strip() and not _is_marker(l)]
+        if prompt_lines:
+            initial_prompt = " ".join(prompt_lines[:5])
+
+    logger.info("Transcribing audio (language_hint: %s, initial_prompt: %s)", 
+                language, (initial_prompt[:50] + "...") if initial_prompt else "None")
+
     segments, info = model.transcribe(
         wav_path,
         beam_size=5,
         word_timestamps=True,
-        language=None,  # auto-detect
+        language=language,  # Use our hint or None for auto-detect
+        initial_prompt=initial_prompt,
+        vad_filter=True, # Significantly improves robustness to music/silence
+        vad_parameters=dict(min_silence_duration_ms=500),
     )
 
     words = []
@@ -178,17 +226,20 @@ def _align_lines_to_words(
     # Split lyrics into individual words, tracking which line each belongs to
     lyrics_word_entries = []  # (normalized_word, line_index)
     for line_idx, line in enumerate(lyrics_lines):
+        # Skip markers (metadata) during alignment to avoid matching them to random sounds
+        if _is_marker(line):
+            continue
+            
         line_words = _normalize(line).split()
         for w in line_words:
             if w:
                 lyrics_word_entries.append((w, line_idx))
 
     if len(lyrics_word_entries) == 0:
-        logger.warning("Empty lyrics word list - returning zero timestamps")
+        logger.warning("No lyrics words to align (only markers?) - returning zero timestamps")
         return [(line, 0) for line in lyrics_lines]
 
     # Filter whisper words to only those that normalize to something non-empty
-    # This prevents empty strings in whisper_normalized which causes issues with vector sizes and indexing
     whisper_words = [w for w in whisper_words if _normalize(w["word"])]
     whisper_normalized = [_normalize(w["word"]) for w in whisper_words]
 
@@ -203,59 +254,37 @@ def _align_lines_to_words(
     for w in whisper_normalized:
         all_chars.update(w)
     
-    # If vocab is empty, we have no features to align on
     if not all_chars:
-        # Should be covered by empty word checks but theoretical edge case where words exist but contain no chars?
-        # (e.g. if _normalize removed everything but we still had non-empty strings?? No, _normalize returns empty string then.)
-        # Maybe if user input weird unicode kept by _normalize but not handled correctly?
-        logger.warning("Vocabulary is empty despite having words - returning zero timestamps")
+        logger.warning("Vocabulary is empty - returning zero timestamps")
         return [(line, 0) for line in lyrics_lines]
 
     vocab = {ch: i for i, ch in enumerate(sorted(all_chars))}
     vocab_size = len(vocab)
     
-    # Validate consistent vector size logic
-    if vocab_size == 0:
-        logger.error("Constraints violation: vocab_size is 0 but all_chars is not empty?")
-        return [(line, 0) for line in lyrics_lines]
- 
     def to_vec(word: str) -> np.ndarray:
         vec = np.zeros(vocab_size, dtype=np.float32)
         for ch in word:
             if ch in vocab:
                 vec[vocab[ch]] += 1.0
-        # Normalize to unit length to reduce bias from word length
         norm = np.linalg.norm(vec)
         if norm > 0:
             vec /= norm
         return vec
 
-    # Ensure float32 and 2D shapes
     lyrics_vecs = np.array([to_vec(w) for w, _ in lyrics_word_entries], dtype=np.float32)
     whisper_vecs = np.array([to_vec(w) for w in whisper_normalized], dtype=np.float32)
 
-    # Ensure 2D (N, D) - though logic above should ensure this, explicit check helps
     if lyrics_vecs.ndim == 1: lyrics_vecs = lyrics_vecs.reshape(1, -1)
     if whisper_vecs.ndim == 1: whisper_vecs = whisper_vecs.reshape(1, -1)
 
     logger.info("Aligning %d lyric words vs %d whisper words (vocab size: %d, shapes: %s, %s)", 
                 len(lyrics_vecs), len(whisper_vecs), vocab_size, lyrics_vecs.shape, whisper_vecs.shape)
 
-    # DTW alignment
     try:
-        # Step pattern 'symmetric2' is standard. 'euclidean' computes dist matrix internally.
-        # However, dtw-python automatically transposes 1D input (frames=1, features=M) to (M, 1),
-        # which breaks when comparing (1, M) vs (N, M).
-        # We manually compute the distance matrix to avoid this heuristic.
         dist_matrix = cdist(lyrics_vecs, whisper_vecs, metric="euclidean")
         alignment = dtw(dist_matrix, step_pattern="symmetric2")
     except ValueError as e:
-        logger.error("DTW failed (shapes: lyrics=%s, whisper=%s, vocab=%d): %s", 
-                     lyrics_vecs.shape, whisper_vecs.shape, vocab_size, e)
-        # Fallback: simple linear mapping or return 0s
-        logger.warning("Falling back to linear time mapping due to DTW failure")
-        # Simple linear mapping: spread timestamps evenly? Or just 0s.
-        # Actually, let's just return 0s for now to avoid crashing completely.
+        logger.error("DTW failed: %s", e)
         return [(line, 0) for line in lyrics_lines]
 
     # Map each lyrics word to its best Whisper word match
@@ -272,15 +301,29 @@ def _align_lines_to_words(
             start_ms = int(whisper_words[w_idx]["start"] * 1000)
             line_timestamps[line_idx] = start_ms
 
-    # Build final result, carrying forward last known timestamp for unmatched lines
+    # Build final result, inheriting timestamps intelligently
     result = []
-    last_ts = 0
+    # 1. Fill in known timestamps
     for i, line in enumerate(lyrics_lines):
-        ts = line_timestamps.get(i, last_ts)
-        result.append((line, ts))
-        last_ts = ts
+        ts = line_timestamps.get(i)
+        result.append([line, ts]) # List for mutability
+    
+    # 2. Backward fill for markers at the start of a section
+    # If a marker exists just before a line with a timestamp, it should take that timestamp
+    for i in range(len(result) - 2, -1, -1):
+        if result[i][1] is None and _is_marker(result[i][0]):
+            if result[i+1][1] is not None:
+                result[i][1] = result[i+1][1]
 
-    return result
+    # 3. Forward fill for the rest (default to 0 or previous)
+    last_known_ts = 0
+    for i in range(len(result)):
+        if result[i][1] is None:
+            result[i][1] = last_known_ts
+        else:
+            last_known_ts = result[i][1]
+
+    return [(line, ts) for line, ts in result]
 
 
 def align_lyrics_to_audio(
@@ -301,7 +344,7 @@ def align_lyrics_to_audio(
         raise ValueError("No lyrics lines found")
 
     # Get word-level timestamps from Whisper
-    whisper_words = _transcribe_with_word_timestamps(wav_path)
+    whisper_words = _transcribe_with_word_timestamps(wav_path, lyrics_text=lyrics_text)
 
     # Align user lyrics to whisper timestamps
     synced = _align_lines_to_words(lyrics_lines, whisper_words)
