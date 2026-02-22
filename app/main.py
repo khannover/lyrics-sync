@@ -1,31 +1,66 @@
-"""
-FastAPI application – accepts MP3 + lyrics, returns MP3 with synced lyrics.
-"""
-
 import shutil
 import uuid
 import logging
+import asyncio
+import time
 from pathlib import Path
 from io import BytesIO
 from zipfile import ZipFile
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles  # ← add this
+from fastapi.staticfiles import StaticFiles
+
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.alignment import align_lyrics_to_audio
 from app.sylt_writer import write_sylt_tag, write_lrc_file
 
-logging.basicConfig(level=logging.INFO)
+WORK_DIR = Path("/tmp/lyric-sync")
+WORK_DIR.mkdir(parents=True, exist_ok=True)
+
+limiter = Limiter(key_func=get_remote_address)
+semaphore = asyncio.Semaphore(2)
+waiting_jobs = 0
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Background cleanup task
+    async def cleanup_loop():
+        logging.info("Starting background cleanup task...")
+        while True:
+            try:
+                await asyncio.sleep(600)
+                now = time.time()
+                for item in WORK_DIR.iterdir():
+                    if item.is_dir():
+                        mtime = item.stat().st_mtime
+                        if (now - mtime) > 3600:
+                            logging.info(f"Cleaning up old job folder: {item.name}")
+                            shutil.rmtree(item)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logging.exception("Error in cleanup task")
+
+    cleanup_task = asyncio.create_task(cleanup_loop())
+    yield
+    cleanup_task.cancel()
+    await asyncio.gather(cleanup_task, return_exceptions=True)
 
 app = FastAPI(
     title="Lyrics Sync Service",
     description="Synchronize lyrics to MP3 audio using Whisper forced alignment.",
     version="1.0.0",
+    lifespan=lifespan,
 )
-
-WORK_DIR = Path("/tmp/lyric-sync")
-WORK_DIR.mkdir(parents=True, exist_ok=True)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 
 # ─── Serve index.html at root ───
@@ -37,7 +72,9 @@ async def root():
 # ─── All your existing endpoints below (unchanged) ───
 
 @app.post("/sync", summary="Upload MP3 + lyrics, get back ZIP with synced MP3 + LRC")
+@limiter.limit("5/hour")
 async def sync_lyrics(
+    request: Request,
     mp3: UploadFile = File(..., description="MP3 audio file"),
     lyrics: UploadFile = File(..., description="Plain-text lyrics file (UTF-8)"),
 ):
@@ -61,7 +98,13 @@ async def sync_lyrics(
         if not lyrics_text:
             raise HTTPException(status_code=400, detail="Lyrics file is empty.")
 
-        synced = align_lyrics_to_audio(str(mp3_path), lyrics_text, job_dir=str(job_dir))
+        global waiting_jobs
+        waiting_jobs += 1
+        async with semaphore:
+            waiting_jobs -= 1
+            synced = await asyncio.to_thread(
+                align_lyrics_to_audio, str(mp3_path), lyrics_text, job_dir=str(job_dir)
+            )
 
         base_name = Path(mp3.filename).stem
         output_mp3 = job_dir / f"{base_name}_synced.mp3"
@@ -92,7 +135,9 @@ async def sync_lyrics(
 
 
 @app.post("/sync/mp3-only", summary="Upload MP3 + lyrics, get back only the tagged MP3")
+@limiter.limit("5/hour")
 async def sync_lyrics_mp3_only(
+    request: Request,
     mp3: UploadFile = File(..., description="MP3 audio file"),
     lyrics: UploadFile = File(..., description="Plain-text lyrics file (UTF-8)"),
 ):
@@ -116,7 +161,13 @@ async def sync_lyrics_mp3_only(
         if not lyrics_text:
             raise HTTPException(status_code=400, detail="Lyrics file is empty.")
 
-        synced = align_lyrics_to_audio(str(mp3_path), lyrics_text, job_dir=str(job_dir))
+        global waiting_jobs
+        waiting_jobs += 1
+        async with semaphore:
+            waiting_jobs -= 1
+            synced = await asyncio.to_thread(
+                align_lyrics_to_audio, str(mp3_path), lyrics_text, job_dir=str(job_dir)
+            )
 
         output_path = job_dir / "output.mp3"
         shutil.copy2(mp3_path, output_path)
@@ -134,6 +185,23 @@ async def sync_lyrics_mp3_only(
         raise HTTPException(status_code=500, detail=f"Alignment failed: {e}")
 
 
+@app.get("/queue", summary="Returns current number of waiting jobs")
+async def get_queue():
+    return {
+        "waiting_jobs": waiting_jobs,
+        "total_slots": 2,
+        "active_jobs": 2 - semaphore._value
+    }
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    usage = shutil.disk_usage(WORK_DIR)
+    return {
+        "status": "ok",
+        "disk": {
+            "total_gb": round(usage.total / (2**30), 2),
+            "used_gb": round(usage.used / (2**30), 2),
+            "free_gb": round(usage.free / (2**30), 2),
+        }
+    }
