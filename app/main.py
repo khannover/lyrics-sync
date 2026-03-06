@@ -8,7 +8,7 @@ from io import BytesIO
 from zipfile import ZipFile
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -78,9 +78,15 @@ async def sync_lyrics(
     request: Request,
     mp3: UploadFile = File(..., description="MP3 audio file"),
     lyrics: UploadFile = File(..., description="Plain-text lyrics file (UTF-8)"),
+    embed_mode: str = Form(
+        default="overwrite",
+        description='Embedding mode: "overwrite" overwrites USLT/TXXX with LRC-timestamped text; "sylt_only" adds only the SYLT frame without touching plain lyrics.',
+    ),
 ):
     if not mp3.filename.lower().endswith(".mp3"):
         raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
+    if embed_mode not in ("overwrite", "sylt_only"):
+        raise HTTPException(status_code=400, detail='embed_mode must be "overwrite" or "sylt_only".')
 
     job_id = str(uuid.uuid4())
     job_dir = WORK_DIR / job_id
@@ -112,7 +118,7 @@ async def sync_lyrics(
         output_lrc = job_dir / f"{base_name}_synced.lrc"
 
         shutil.copy2(mp3_path, output_mp3)
-        write_sylt_tag(str(output_mp3), synced)
+        write_sylt_tag(str(output_mp3), synced, embed_mode=embed_mode)
         write_lrc_file(str(output_lrc), synced)
 
         zip_buffer = BytesIO()
@@ -141,9 +147,15 @@ async def sync_lyrics_mp3_only(
     request: Request,
     mp3: UploadFile = File(..., description="MP3 audio file"),
     lyrics: UploadFile = File(..., description="Plain-text lyrics file (UTF-8)"),
+    embed_mode: str = Form(
+        default="overwrite",
+        description='Embedding mode: "overwrite" overwrites USLT/TXXX with LRC-timestamped text; "sylt_only" adds only the SYLT frame without touching plain lyrics.',
+    ),
 ):
     if not mp3.filename.lower().endswith(".mp3"):
         raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
+    if embed_mode not in ("overwrite", "sylt_only"):
+        raise HTTPException(status_code=400, detail='embed_mode must be "overwrite" or "sylt_only".')
 
     job_id = str(uuid.uuid4())
     job_dir = WORK_DIR / job_id
@@ -172,7 +184,7 @@ async def sync_lyrics_mp3_only(
 
         output_path = job_dir / "output.mp3"
         shutil.copy2(mp3_path, output_path)
-        write_sylt_tag(str(output_path), synced)
+        write_sylt_tag(str(output_path), synced, embed_mode=embed_mode)
 
         return FileResponse(
             path=str(output_path),

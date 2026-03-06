@@ -34,25 +34,36 @@ def write_sylt_tag(
     synced_lyrics: List[Tuple[str, int]],
     lang: str = "eng",
     desc: str = "",
+    embed_mode: str = "overwrite",
 ):
     """
-    Write synchronized lyrics in multiple formats for broad player support.
+    Write synchronized lyrics into MP3 ID3 tags.
 
-    Writes:
-    - SYLT frame (ID3v2 standard)
-    - USLT frame with LRC-formatted text (AIMP, MusicBee, foobar2000, etc.)
-    - TXXX:LYRICS with LRC text (fallback for some players)
+    embed_mode="overwrite" (default):
+        Removes SYLT, USLT, TXXX:LYRICS frames, then writes:
+        - SYLT frame (ID3v2 standard)
+        - USLT frame (desc="synced") with LRC text
+        - USLT frame (desc="")       with LRC text
+        - TXXX:LYRICS with LRC text
+
+    embed_mode="sylt_only":
+        Removes only SYLT frames, then writes only the SYLT frame.
+        Existing USLT / TXXX:LYRICS (plain unsynced lyrics) are preserved.
     """
     audio = MP3(mp3_path)
 
     if audio.tags is None:
         audio.add_tags()
 
-    # --- Remove existing lyrics frames ---
-    to_remove = [key for key in audio.tags
-                 if key.startswith("SYLT")
-                 or key.startswith("USLT")
-                 or key.startswith("TXXX:LYRICS")]
+    if embed_mode == "sylt_only":
+        # --- Remove only existing SYLT frames ---
+        to_remove = [key for key in audio.tags if key.startswith("SYLT")]
+    else:
+        # --- Remove existing SYLT, USLT, and TXXX:LYRICS frames ---
+        to_remove = [key for key in audio.tags
+                     if key.startswith("SYLT")
+                     or key.startswith("USLT")
+                     or key.startswith("TXXX:LYRICS")]
     for key in to_remove:
         del audio.tags[key]
 
@@ -70,30 +81,31 @@ def write_sylt_tag(
         text=sylt_data,
     ))
 
-    # --- 2. USLT frame with embedded LRC timestamps ---
-    lrc_text = _build_lrc(synced_lyrics)
+    if embed_mode != "sylt_only":
+        # --- 2. USLT frame with embedded LRC timestamps ---
+        lrc_text = _build_lrc(synced_lyrics)
 
-    audio.tags.add(USLT(
-        encoding=Encoding.UTF8,
-        lang=lang,
-        desc="synced",
-        text=lrc_text,
-    ))
+        audio.tags.add(USLT(
+            encoding=Encoding.UTF8,
+            lang=lang,
+            desc="synced",
+            text=lrc_text,
+        ))
 
-    # Also add a plain USLT without desc for players that expect that
-    audio.tags.add(USLT(
-        encoding=Encoding.UTF8,
-        lang=lang,
-        desc="",
-        text=lrc_text,
-    ))
+        # Also add a plain USLT without desc for players that expect that
+        audio.tags.add(USLT(
+            encoding=Encoding.UTF8,
+            lang=lang,
+            desc="",
+            text=lrc_text,
+        ))
 
-    # --- 3. TXXX:LYRICS fallback ---
-    audio.tags.add(TXXX(
-        encoding=Encoding.UTF8,
-        desc="LYRICS",
-        text=[lrc_text],
-    ))
+        # --- 3. TXXX:LYRICS fallback ---
+        audio.tags.add(TXXX(
+            encoding=Encoding.UTF8,
+            desc="LYRICS",
+            text=[lrc_text],
+        ))
 
     audio.save(v2_version=3)  # ID3v2.3 for max compatibility
 
