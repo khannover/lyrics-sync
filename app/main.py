@@ -19,6 +19,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.alignment import align_lyrics_to_audio
 from app.sylt_writer import write_sylt_tag, write_lrc_file
+from app.lyrics_tag_reader import extract_lyrics_from_mp3
 
 WORK_DIR = Path("/tmp/lyric-sync")
 WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -183,6 +184,36 @@ async def sync_lyrics_mp3_only(
     except Exception as e:
         logging.exception("Alignment failed")
         raise HTTPException(status_code=500, detail=f"Alignment failed: {e}")
+
+
+@app.post(
+    "/lyrics/from-mp3",
+    summary="Extract embedded lyrics from an MP3 file",
+)
+async def lyrics_from_mp3(
+    mp3: UploadFile = File(..., description="MP3 audio file"),
+):
+    if not mp3.filename.lower().endswith(".mp3"):
+        raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
+
+    job_id = str(uuid.uuid4())
+    job_dir = WORK_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        mp3_path = job_dir / "input.mp3"
+        with open(mp3_path, "wb") as f:
+            shutil.copyfileobj(mp3.file, f)
+
+        result = await asyncio.to_thread(extract_lyrics_from_mp3, str(mp3_path))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception("Lyrics extraction failed")
+        raise HTTPException(status_code=500, detail=f"Lyrics extraction failed: {e}")
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
 
 
 @app.get("/queue", summary="Returns current number of waiting jobs")
