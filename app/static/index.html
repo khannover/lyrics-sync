@@ -23,6 +23,10 @@
         .choice-row label { color: #ccc; font-size: 0.8rem; text-transform: none; letter-spacing: 0; }
         .lyrics-textarea { width: 100%; min-height: 120px; background: #1c1c1c; color: #f2f2f2; border: 1px solid #333; border-radius: 4px; padding: 10px; resize: vertical; font-family: 'Segoe UI', sans-serif; }
         .hidden { display: none; }
+        .embedded-lyrics-panel { background: #111; border: 1px solid #2a2a2a; border-radius: 4px; padding: 10px; margin-top: 6px; }
+        .embedded-lyrics-panel summary { color: var(--orange); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; cursor: pointer; user-select: none; }
+        .embedded-lyrics-panel textarea { width: 100%; min-height: 80px; background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a; border-radius: 4px; padding: 8px; font-family: 'Segoe UI', sans-serif; font-size: 0.78rem; resize: vertical; margin-top: 8px; }
+        .embed-status { font-size: 0.73rem; padding: 4px 0 2px; }
 
         .status-bar { margin-top: 30px; width: 95%; max-width: 500px; padding: 8px 15px; font-size: 0.75rem; color: #888; background: #111; border-bottom: 1px solid #222; min-height: 30px; display: flex; align-items: center; gap: 10px; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }
         .status-bar .spinner { width: 14px; height: 14px; border: 2px solid #555; border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; display: none; }
@@ -69,6 +73,14 @@
                     <button id="btn-sync" disabled>🔄 Sync Lyrics</button>
                 </div>
             </div>
+            <!-- Embedded lyrics panel (shown after MP3 selection) -->
+            <div id="embedded-lyrics-wrap" class="hidden">
+                <div class="embed-status" id="embed-status-text"></div>
+                <details class="embedded-lyrics-panel" id="timed-lrc-panel">
+                    <summary>Timed Lyrics (LRC)</summary>
+                    <textarea id="embed-lrc-text" readonly></textarea>
+                </details>
+            </div>
         </div>
 
         <!-- Tab 2: Manual local files -->
@@ -112,6 +124,10 @@
         const lyricsSource = document.querySelectorAll('input[name="lyrics-source"]');
         const manualAudio = document.getElementById('manual-audio');
         const manualLrcText = document.getElementById('manual-lrc-text');
+        const embeddedWrap = document.getElementById('embedded-lyrics-wrap');
+        const embedStatusText = document.getElementById('embed-status-text');
+        const timedLrcPanel = document.getElementById('timed-lrc-panel');
+        const embedLrcText = document.getElementById('embed-lrc-text');
 
         let syncMap = [];
 
@@ -143,6 +159,72 @@
         autoAudio.addEventListener('change', checkAutoReady);
         autoLyricsFile.addEventListener('change', checkAutoReady);
         autoLyricsText.addEventListener('input', checkAutoReady);
+
+        // ─── Extract embedded lyrics when MP3 is chosen ───
+        autoAudio.addEventListener('change', async () => {
+            const file = autoAudio.files[0];
+            embeddedWrap.classList.add('hidden');
+            embedLrcText.value = '';
+            if (!file) return;
+
+            embedStatusText.style.color = '#888';
+            embedStatusText.textContent = '🔍 Checking for embedded lyrics…';
+            embeddedWrap.classList.remove('hidden');
+
+            try {
+                const form = new FormData();
+                form.append('mp3', file);
+                const resp = await fetch('/lyrics/from-mp3', { method: 'POST', body: form });
+                if (!resp.ok) {
+                    embedStatusText.style.color = '#f88';
+                    embedStatusText.textContent = '⚠️ Could not read embedded lyrics.';
+                    return;
+                }
+                const data = await resp.json();
+                const found = data.sources && (data.sources.uslt || data.sources.txxx_lyrics || data.sources.sylt);
+                if (!found || (!data.plain_lyrics && !data.timed_lyrics_lrc)) {
+                    embedStatusText.style.color = '#888';
+                    embedStatusText.textContent = 'ℹ️ No embedded lyrics found.';
+                    timedLrcPanel.classList.add('hidden');
+                    return;
+                }
+
+                // Build source label
+                const srcNames = [];
+                if (data.sources.uslt) srcNames.push('USLT');
+                if (data.sources.txxx_lyrics) srcNames.push('TXXX');
+                if (data.sources.sylt) srcNames.push('SYLT');
+                embedStatusText.style.color = '#8f8';
+                embedStatusText.textContent = `✅ Found embedded lyrics (${srcNames.join('/')}).`;
+
+                // Show timed LRC panel if available
+                if (data.timed_lyrics_lrc) {
+                    embedLrcText.value = data.timed_lyrics_lrc;
+                    timedLrcPanel.classList.remove('hidden');
+                } else {
+                    timedLrcPanel.classList.add('hidden');
+                }
+
+                // Pre-populate plain lyrics textarea and switch to text mode
+                if (data.plain_lyrics) {
+                    autoLyricsText.value = data.plain_lyrics;
+                    // Switch to text mode
+                    const textRadio = document.querySelector('input[name="lyrics-source"][value="text"]');
+                    if (textRadio) {
+                        textRadio.checked = true;
+                        lyricsMode = 'text';
+                        autoLyricsFile.classList.add('hidden');
+                        autoLyricsText.classList.remove('hidden');
+                        autoLyricsFile.value = '';
+                    }
+                    checkAutoReady();
+                }
+            } catch (e) {
+                embedStatusText.style.color = '#f88';
+                embedStatusText.textContent = '⚠️ Error checking embedded lyrics.';
+                console.error(e);
+            }
+        });
 
         lyricsSource.forEach(radio => {
             radio.addEventListener('change', () => {
