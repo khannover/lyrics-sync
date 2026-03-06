@@ -820,6 +820,32 @@
                 : autoLyricsText.value.trim().length > 0;
             btnSync.disabled = !(autoAudio.files.length && hasLyrics);
         }
+
+        function activatePasteTextMode(prefillText = '') {
+            if (prefillText) {
+                autoLyricsText.value = prefillText;
+            }
+
+            const textRadio = document.querySelector('input[name="lyrics-source"][value="text"]');
+            if (textRadio) {
+                textRadio.checked = true;
+            }
+
+            lyricsMode = 'text';
+            autoLyricsFile.classList.add('hidden');
+            autoLyricsText.classList.remove('hidden');
+            autoLyricsFile.value = '';
+            checkAutoReady();
+        }
+
+        function lrcToPlainText(lrcText = '') {
+            return lrcText
+                .split('\n')
+                .map(line => line.replace(/^\s*\[\d+:\d{2}(?:\.\d+)?\]\s*/, '').trim())
+                .filter(Boolean)
+                .join('\n');
+        }
+
         autoAudio.addEventListener('change', checkAutoReady);
         autoLyricsFile.addEventListener('change', checkAutoReady);
         autoLyricsText.addEventListener('input', checkAutoReady);
@@ -869,20 +895,12 @@
                     timedLrcPanel.classList.add('hidden');
                 }
 
-                // Pre-populate plain lyrics textarea and switch to text mode
-                if (data.plain_lyrics) {
-                    autoLyricsText.value = data.plain_lyrics;
-                    // Switch to text mode
-                    const textRadio = document.querySelector('input[name="lyrics-source"][value="text"]');
-                    if (textRadio) {
-                        textRadio.checked = true;
-                        lyricsMode = 'text';
-                        autoLyricsFile.classList.add('hidden');
-                        autoLyricsText.classList.remove('hidden');
-                        autoLyricsFile.value = '';
-                    }
-                    checkAutoReady();
-                }
+                // Always switch to paste-text mode when lyrics were extracted.
+                // If plain lyrics are missing, derive readable plain text from timed LRC.
+                const extractedPlain = (data.plain_lyrics && data.plain_lyrics.trim())
+                    ? data.plain_lyrics
+                    : lrcToPlainText(data.timed_lyrics_lrc || '');
+                activatePasteTextMode(extractedPlain);
             } catch (e) {
                 embedStatusText.style.color = '#f88';
                 embedStatusText.textContent = '⚠️ Error checking embedded lyrics.';
