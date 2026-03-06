@@ -234,6 +234,57 @@
             line-height: 1.4;
         }
 
+        .manual-tools {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .manual-tools-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .manual-btn {
+            border: 1px solid rgba(124, 171, 221, 0.36);
+            border-radius: 9px;
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.78rem;
+            letter-spacing: 0.02em;
+            padding: 8px 10px;
+            cursor: pointer;
+            transition: 160ms ease;
+        }
+
+        .manual-btn:hover {
+            border-color: rgba(127, 224, 255, 0.52);
+            background: rgba(54, 193, 255, 0.12);
+        }
+
+        .manual-tools-note {
+            font-size: 0.74rem;
+            color: var(--muted);
+            line-height: 1.4;
+        }
+
+        .manual-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text);
+            font-size: 0.78rem;
+            padding: 6px 0 2px;
+        }
+
+        .manual-toggle input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent);
+        }
+
         .sync-note {
             border: 1px solid rgba(255, 154, 61, 0.34);
             border-left: 4px solid var(--accent-2);
@@ -512,6 +563,25 @@
                     <label>2. Paste Sync Data (LRC text)</label>
                     <textarea id="manual-lrc-text" class="lyrics-textarea" placeholder="Paste LRC content here..."></textarea>
                 </div>
+                <div class="control-group">
+                    <label>3. Manual Alignment Tools</label>
+                    <div class="manual-tools">
+                        <label class="manual-toggle">
+                            <input type="checkbox" id="manual-editing-mode">
+                            Editing Mode (no auto-play on line click, freeze timeline highlight)
+                        </label>
+                        <div class="manual-tools-row">
+                            <button type="button" class="manual-btn" id="btn-manual-set-current">Set selected line to current time</button>
+                            <button type="button" class="manual-btn" id="btn-manual-nudge-back">Nudge -100ms</button>
+                            <button type="button" class="manual-btn" id="btn-manual-nudge-forward">Nudge +100ms</button>
+                        </div>
+                        <div class="manual-tools-row">
+                            <button type="button" class="manual-btn" id="btn-manual-export">Download fixed LRC</button>
+                            <button type="button" class="manual-btn" id="btn-manual-use-input">Use my fixed timestamped lyrics as sync input</button>
+                        </div>
+                        <div class="manual-tools-note">Tip: click a lyric line in the preview to select it, then use Set/Nudge for precise manual timing.</div>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -547,6 +617,12 @@
         const lyricsSource = document.querySelectorAll('input[name="lyrics-source"]');
         const manualAudio = document.getElementById('manual-audio');
         const manualLrcText = document.getElementById('manual-lrc-text');
+        const btnManualSetCurrent = document.getElementById('btn-manual-set-current');
+        const btnManualNudgeBack = document.getElementById('btn-manual-nudge-back');
+        const btnManualNudgeForward = document.getElementById('btn-manual-nudge-forward');
+        const btnManualExport = document.getElementById('btn-manual-export');
+        const btnManualUseInput = document.getElementById('btn-manual-use-input');
+        const manualEditingModeToggle = document.getElementById('manual-editing-mode');
         const embeddedWrap = document.getElementById('embedded-lyrics-wrap');
         const embedStatusText = document.getElementById('embed-status-text');
         const timedLrcPanel = document.getElementById('timed-lrc-panel');
@@ -567,6 +643,53 @@
         }
 
         let syncMap = [];
+        let selectedLineIdx = -1;
+        let manualEditingMode = false;
+
+        function formatLrcTimestamp(ms) {
+            const safe = Math.max(0, Math.round(ms));
+            const minutes = Math.floor(safe / 60000);
+            const seconds = (safe % 60000) / 1000;
+            return `[${String(minutes).padStart(2, '0')}:${seconds.toFixed(2).padStart(5, '0')}]`;
+        }
+
+        function serializeSyncMapToLrc() {
+            return syncMap
+                .map(item => `${formatLrcTimestamp(item.time)}${item.text}`)
+                .join('\n');
+        }
+
+        function updateManualTextareaFromSyncMap() {
+            if (syncMap.length === 0) return;
+            manualLrcText.value = serializeSyncMapToLrc();
+        }
+
+        function renderSyncMapLines() {
+            content.innerHTML = '';
+            syncMap.forEach((item, i) => {
+                const div = document.createElement('div');
+                div.className = 'lyric-line';
+                div.id = `line-${i}`;
+                div.innerText = item.text;
+                // Click selects line and seeks.
+                div.addEventListener('click', () => {
+                    selectedLineIdx = i;
+                    player.currentTime = item.time / 1000;
+                    if (!manualEditingMode && player.paused) player.play();
+                });
+                content.appendChild(div);
+            });
+        }
+
+        manualEditingModeToggle?.addEventListener('change', () => {
+            manualEditingMode = !!manualEditingModeToggle.checked;
+            if (manualEditingMode) {
+                player.pause();
+                setStatus('Editing mode enabled. Playback auto-start is disabled.', false);
+            } else {
+                setStatus('Editing mode disabled.', false);
+            }
+        });
 
         // ─── Tab switching ───
         document.querySelectorAll('.tab').forEach(tab => {
@@ -750,6 +873,7 @@
             if (!text.trim()) {
                 setStatus('Awaiting LRC text…', false);
                 syncMap = [];
+                selectedLineIdx = -1;
                 content.innerHTML = '<div class="lyric-line active">Waiting for LRC text...</div>';
                 return;
             }
@@ -757,10 +881,77 @@
             setStatus(`✅ LRC text loaded: ${syncMap.length} lines. Press play.`, false);
         });
 
+        btnManualSetCurrent?.addEventListener('click', () => {
+            if (!syncMap.length) return;
+            const idx = selectedLineIdx >= 0 ? selectedLineIdx : Math.max(0, lastActive);
+            const nowMs = Math.max(0, Math.round(player.currentTime * 1000));
+            syncMap[idx].time = nowMs;
+            updateManualTextareaFromSyncMap();
+            parseLrc(manualLrcText.value);
+            selectedLineIdx = idx;
+            setStatus(`Updated line ${idx + 1} to ${formatLrcTimestamp(nowMs)}.`, false);
+        });
+
+        btnManualNudgeBack?.addEventListener('click', () => {
+            if (!syncMap.length) return;
+            const idx = selectedLineIdx >= 0 ? selectedLineIdx : Math.max(0, lastActive);
+            syncMap[idx].time = Math.max(0, syncMap[idx].time - 100);
+            updateManualTextareaFromSyncMap();
+            parseLrc(manualLrcText.value);
+            selectedLineIdx = idx;
+            setStatus(`Nudged line ${idx + 1} by -100ms.`, false);
+        });
+
+        btnManualNudgeForward?.addEventListener('click', () => {
+            if (!syncMap.length) return;
+            const idx = selectedLineIdx >= 0 ? selectedLineIdx : Math.max(0, lastActive);
+            syncMap[idx].time = Math.max(0, syncMap[idx].time + 100);
+            updateManualTextareaFromSyncMap();
+            parseLrc(manualLrcText.value);
+            selectedLineIdx = idx;
+            setStatus(`Nudged line ${idx + 1} by +100ms.`, false);
+        });
+
+        btnManualExport?.addEventListener('click', () => {
+            if (!syncMap.length) return;
+            const lrcText = serializeSyncMapToLrc() + '\n';
+            const blob = new Blob([lrcText], { type: 'text/plain;charset=utf-8' });
+            offerDownload(blob, 'manual_fixed.lrc');
+            setStatus('Downloaded fixed LRC.', false);
+        });
+
+        btnManualUseInput?.addEventListener('click', () => {
+            if (!syncMap.length) {
+                setStatus('No fixed LRC lines available to use as input.', false);
+                return;
+            }
+
+            // Use the edited timestamped lines as lyric text input for sync.
+            autoLyricsText.value = syncMap.map(item => item.text).join('\n');
+            const textRadio = document.querySelector('input[name="lyrics-source"][value="text"]');
+            if (textRadio) {
+                textRadio.checked = true;
+                lyricsMode = 'text';
+                autoLyricsFile.classList.add('hidden');
+                autoLyricsText.classList.remove('hidden');
+                autoLyricsFile.value = '';
+            }
+
+            // Move user to Auto Sync tab.
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            const autoTab = document.querySelector('.tab[data-tab="auto"]');
+            if (autoTab) autoTab.classList.add('active');
+            document.getElementById('tab-auto')?.classList.add('active');
+
+            checkAutoReady();
+            setStatus('Fixed lyrics copied to Auto Sync input. Select MP3 (if needed) and run sync.', false);
+        });
+
         // ─── LRC Parser ───
         function parseLrc(raw) {
             syncMap = [];
-            content.innerHTML = '';
+            selectedLineIdx = -1;
             raw.split('\n').forEach(line => {
                 const match = line.match(/\[(\d+):(\d+\.?\d*)\](.*)/);
                 if (match) {
@@ -769,23 +960,16 @@
                     if (text) syncMap.push({ time: ms, text });
                 }
             });
-            syncMap.forEach((item, i) => {
-                const div = document.createElement('div');
-                div.className = 'lyric-line';
-                div.id = `line-${i}`;
-                div.innerText = item.text;
-                // Click to seek
-                div.addEventListener('click', () => {
-                    player.currentTime = item.time / 1000;
-                    if (player.paused) player.play();
-                });
-                content.appendChild(div);
-            });
+            renderSyncMapLines();
         }
 
         // ─── Sync Engine ───
         let lastActive = -1;
         player.addEventListener('timeupdate', () => {
+            if (manualEditingMode) {
+                return;
+            }
+
             const now = player.currentTime * 1000;
             let activeIdx = -1;
 

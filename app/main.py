@@ -4,6 +4,7 @@ import logging
 import asyncio
 import time
 import re
+import subprocess
 from pathlib import Path
 from io import BytesIO
 from zipfile import ZipFile
@@ -13,6 +14,7 @@ from urllib.parse import quote
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from mutagen.mp3 import MP3, HeaderNotFoundError
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -43,6 +45,47 @@ def _content_disposition_attachment(filename: str) -> str:
     # RFC 5987 encoding for full UTF-8 filename support.
     utf8_encoded = quote(filename, safe="")
     return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
+
+
+def _ensure_taggable_mp3(input_path: Path, job_dir: Path) -> Path:
+    """
+    Return a valid MP3 path that mutagen can tag.
+
+    Some generators/exporters produce files with .mp3 extension that are not
+    actual MPEG-frame MP3 streams. In that case we transcode once via ffmpeg.
+    """
+    try:
+        MP3(str(input_path))
+        return input_path
+    except HeaderNotFoundError:
+        logging.warning("Input is not a taggable MP3 stream, transcoding via ffmpeg: %s", input_path.name)
+
+    normalized_path = job_dir / "input_normalized.mp3"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", str(input_path),
+        "-vn",
+        "-c:a", "libmp3lame",
+        "-b:a", "192k",
+        str(normalized_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 or not normalized_path.exists():
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is not a valid MP3 stream and could not be converted.",
+        )
+
+    try:
+        MP3(str(normalized_path))
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded audio could not be normalized into a valid MP3.",
+        )
+
+    return normalized_path
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -124,6 +167,9 @@ async def sync_lyrics(
 
         with open(mp3_path, "wb") as f:
             shutil.copyfileobj(mp3.file, f)
+
+        mp3_path = _ensure_taggable_mp3(mp3_path, job_dir)
+
         with open(lyrics_path, "wb") as f:
             shutil.copyfileobj(lyrics.file, f)
 
@@ -193,6 +239,9 @@ async def sync_lyrics_mp3_only(
 
         with open(mp3_path, "wb") as f:
             shutil.copyfileobj(mp3.file, f)
+
+        mp3_path = _ensure_taggable_mp3(mp3_path, job_dir)
+
         with open(lyrics_path, "wb") as f:
             shutil.copyfileobj(lyrics.file, f)
 
