@@ -10,6 +10,7 @@ services:
       - /tmp/lyric-sync:/tmp/lyric-sync
     environment:
       - MODEL_SIZE=base
+      - SYNC_RATE_LIMIT=
     restart: unless-stopped
 
 volumes:

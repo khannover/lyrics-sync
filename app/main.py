@@ -5,6 +5,7 @@ import asyncio
 import time
 import re
 import subprocess
+import os
 from pathlib import Path
 from io import BytesIO
 from zipfile import ZipFile
@@ -33,6 +34,8 @@ MAX_TEMP_AGE_SECONDS = 3600
 limiter = Limiter(key_func=get_remote_address)
 semaphore = asyncio.Semaphore(2)
 waiting_jobs = 0
+SYNC_RATE_LIMIT = os.environ.get("SYNC_RATE_LIMIT", "60/hour")
+SYNC_MP3_ONLY_RATE_LIMIT = os.environ.get("SYNC_MP3_ONLY_RATE_LIMIT", SYNC_RATE_LIMIT)
 
 
 def _content_disposition_attachment(filename: str) -> str:
@@ -142,7 +145,7 @@ async def root():
 # ─── All your existing endpoints below (unchanged) ───
 
 @app.post("/sync", summary="Upload MP3 + lyrics, get back ZIP with synced MP3 + LRC")
-@limiter.limit("5/hour")
+@limiter.limit(SYNC_RATE_LIMIT)
 async def sync_lyrics(
     request: Request,
     mp3: UploadFile = File(..., description="MP3 audio file"),
@@ -214,7 +217,7 @@ async def sync_lyrics(
 
 
 @app.post("/sync/mp3-only", summary="Upload MP3 + lyrics, get back only the tagged MP3")
-@limiter.limit("5/hour")
+@limiter.limit(SYNC_MP3_ONLY_RATE_LIMIT)
 async def sync_lyrics_mp3_only(
     request: Request,
     mp3: UploadFile = File(..., description="MP3 audio file"),

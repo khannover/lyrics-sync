@@ -259,6 +259,63 @@
             transition: 160ms ease;
         }
 
+        .result-panel {
+            border: 1px solid rgba(124, 171, 221, 0.24);
+            border-radius: 12px;
+            background: rgba(2, 9, 20, 0.62);
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .result-panel.hidden {
+            display: none;
+        }
+
+        .result-actions {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 8px;
+        }
+
+        .result-actions .manual-btn {
+            min-width: 0;
+            flex: 1;
+        }
+
+        .result-panel.ready {
+            border-color: rgba(127, 224, 255, 0.56);
+            background: rgba(54, 193, 255, 0.1);
+            box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.2) inset, 0 0 20px rgba(54, 193, 255, 0.16);
+            animation: result-ready-pulse 1.4s ease-in-out 2;
+        }
+
+        .result-panel.ready label::after {
+            content: '  READY';
+            color: #9fffd0;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            font-size: 0.72rem;
+        }
+
+        @keyframes result-ready-pulse {
+            0% { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.1) inset, 0 0 0 rgba(54, 193, 255, 0.0); }
+            50% { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.3) inset, 0 0 24px rgba(54, 193, 255, 0.22); }
+            100% { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.2) inset, 0 0 20px rgba(54, 193, 255, 0.16); }
+        }
+
+        @media (max-width: 520px) {
+            .result-actions {
+                flex-direction: row;
+            }
+
+            .result-actions .manual-btn {
+                font-size: 0.7rem;
+                padding: 8px 6px;
+            }
+        }
+
         .manual-btn:hover {
             border-color: rgba(127, 224, 255, 0.52);
             background: rgba(54, 193, 255, 0.12);
@@ -552,6 +609,15 @@
                         <textarea id="embed-lrc-text" readonly></textarea>
                     </details>
                 </div>
+
+                <div class="result-panel hidden" id="sync-result-panel">
+                    <label>Sync Result</label>
+                    <div class="result-actions">
+                        <button type="button" class="manual-btn" id="btn-sync-download" disabled>Download synced ZIP</button>
+                        <button type="button" class="manual-btn" id="btn-copy-timestamped" disabled>Copy timestamped lyrics</button>
+                    </div>
+                    <textarea id="timestamped-lyrics-output" class="lyrics-textarea" placeholder="Timestamped lyrics will appear here after sync..." readonly></textarea>
+                </div>
             </div>
 
             <div class="tab-content" id="tab-manual">
@@ -623,6 +689,10 @@
         const btnManualExport = document.getElementById('btn-manual-export');
         const btnManualUseInput = document.getElementById('btn-manual-use-input');
         const manualEditingModeToggle = document.getElementById('manual-editing-mode');
+        const syncResultPanel = document.getElementById('sync-result-panel');
+        const btnSyncDownload = document.getElementById('btn-sync-download');
+        const btnCopyTimestamped = document.getElementById('btn-copy-timestamped');
+        const timestampedLyricsOutput = document.getElementById('timestamped-lyrics-output');
         const embeddedWrap = document.getElementById('embedded-lyrics-wrap');
         const embedStatusText = document.getElementById('embed-status-text');
         const timedLrcPanel = document.getElementById('timed-lrc-panel');
@@ -645,6 +715,8 @@
         let syncMap = [];
         let selectedLineIdx = -1;
         let manualEditingMode = false;
+        let lastSyncZipBlob = null;
+        let lastSyncZipFileName = 'synced_result.zip';
 
         function formatLrcTimestamp(ms) {
             const safe = Math.max(0, Math.round(ms));
@@ -662,6 +734,25 @@
         function updateManualTextareaFromSyncMap() {
             if (syncMap.length === 0) return;
             manualLrcText.value = serializeSyncMapToLrc();
+        }
+
+        async function copyTextToClipboard(text) {
+            if (!text) return false;
+            try {
+                await navigator.clipboard.writeText(text);
+                return true;
+            } catch {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.focus();
+                ta.select();
+                const ok = document.execCommand('copy');
+                document.body.removeChild(ta);
+                return ok;
+            }
         }
 
         function renderSyncMapLines() {
@@ -706,6 +797,19 @@
             statusTxt.textContent = msg;
             statusBar.classList.toggle('loading', loading);
         }
+
+        btnSyncDownload?.addEventListener('click', () => {
+            if (!lastSyncZipBlob) return;
+            offerDownload(lastSyncZipBlob, lastSyncZipFileName);
+            setStatus('Downloaded synced ZIP.', false);
+        });
+
+        btnCopyTimestamped?.addEventListener('click', async () => {
+            const text = timestampedLyricsOutput?.value?.trim();
+            if (!text) return;
+            const ok = await copyTextToClipboard(text);
+            setStatus(ok ? 'Timestamped lyrics copied to clipboard.' : 'Could not copy lyrics automatically.', false);
+        });
 
         // ─── Enable sync button when both files selected ───
         let lyricsMode = 'file';
@@ -809,6 +913,9 @@
             btnSync.disabled = true;
             setStatus('Uploading and syncing… this may take a minute.', true);
             setSyncNoteBusy(true);
+            if (btnSyncDownload) btnSyncDownload.disabled = true;
+            if (btnCopyTimestamped) btnCopyTimestamped.disabled = true;
+            if (syncResultPanel) syncResultPanel.classList.remove('ready');
 
             try {
                 const form = new FormData();
@@ -841,13 +948,21 @@
                 // Load audio
                 player.src = URL.createObjectURL(mp3Blob);
 
+                // Store result for manual download and copy workflow.
+                lastSyncZipBlob = blob;
+                lastSyncZipFileName = mp3File.name.replace('.mp3', '_synced.zip');
+                if (syncResultPanel) syncResultPanel.classList.remove('hidden');
+                if (timestampedLyricsOutput) {
+                    timestampedLyricsOutput.value = lrcText;
+                }
+                if (btnSyncDownload) btnSyncDownload.disabled = false;
+                if (btnCopyTimestamped) btnCopyTimestamped.disabled = !lrcText.trim();
+                if (syncResultPanel) syncResultPanel.classList.add('ready');
+
                 // Parse LRC and display
                 parseLrc(lrcText);
 
                 setStatus(`✅ Synced! ${syncMap.length} lines aligned. Press play.`, false);
-
-                // Offer download
-                offerDownload(blob, mp3File.name.replace('.mp3', '_synced.zip'));
 
             } catch (err) {
                 setStatus(`❌ Error: ${err.message}`, false);
