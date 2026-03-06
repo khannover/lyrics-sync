@@ -493,10 +493,33 @@ def _align_lines_progressive(
     if not whisper_words:
         return [(line, 0) for line in lyrics_lines]
 
-    whisper_norm = [_normalize(w["word"]) for w in whisper_words]
-    whisper_norm = [w for w in whisper_norm if w]
+    # Keep normalized tokens and timestamp-bearing words in sync.
+    filtered_whisper_words = [w for w in whisper_words if _normalize(w["word"])]
+    whisper_norm = [_normalize(w["word"]) for w in filtered_whisper_words]
     if not whisper_norm:
         return [(line, 0) for line in lyrics_lines]
+
+    def _window_score(line_words: List[str], cand_words: List[str]) -> float:
+        if not line_words or not cand_words:
+            return 0.0
+
+        target = " ".join(line_words)
+        cand = " ".join(cand_words)
+        seq = SequenceMatcher(None, target, cand).ratio()
+
+        line_set = set(line_words)
+        cand_set = set(cand_words)
+        overlap = len(line_set.intersection(cand_set)) / max(1, len(line_set))
+
+        # Prefer windows that start near the lyric line's first word.
+        first_word_bonus = 0.0
+        if cand_words and line_words:
+            if cand_words[0] == line_words[0]:
+                first_word_bonus += 0.08
+            elif line_words[0] in cand_words[:2]:
+                first_word_bonus += 0.04
+
+        return (0.62 * seq) + (0.38 * overlap) + first_word_bonus
 
     line_ts = {}
     cursor = 0
@@ -510,31 +533,29 @@ def _align_lines_progressive(
         if not line_words:
             continue
 
-        target = " ".join(line_words)
         lw_len = len(line_words)
 
         # Search forward in a bounded window to keep alignment monotonic.
         start_lo = min(cursor, max_w - 1)
-        start_hi = min(max_w - 1, start_lo + 180)
+        start_hi = min(max_w - 1, start_lo + 240)
 
         best_start = start_lo
         best_score = -1.0
 
         for s in range(start_lo, start_hi + 1):
             # Compare with multiple candidate phrase lengths around lyric length.
-            for span in range(max(1, lw_len - 2), lw_len + 5):
+            for span in range(max(1, lw_len - 3), lw_len + 6):
                 e = min(max_w, s + span)
                 if e <= s:
                     continue
-                cand = " ".join(whisper_norm[s:e])
-                score = SequenceMatcher(None, target, cand).ratio()
+                score = _window_score(line_words, whisper_norm[s:e])
                 # Mildly prefer earlier positions on ties to reduce jumps.
                 score_adj = score - ((s - start_lo) * 0.0004)
                 if score_adj > best_score:
                     best_score = score_adj
                     best_start = s
 
-        line_ts[line_idx] = int(whisper_words[best_start]["start"] * 1000)
+        line_ts[line_idx] = int(filtered_whisper_words[best_start]["start"] * 1000)
         cursor = min(max_w - 1, best_start + max(1, lw_len - 1))
 
     # Build result and keep markers aligned with neighboring lyrics.
@@ -552,6 +573,16 @@ def _align_lines_progressive(
             result[i][1] = last_known_ts
         else:
             last_known_ts = result[i][1]
+
+    # Stabilize non-marker line order: avoid repeated identical timestamps.
+    prev_non_marker_ts = -1
+    for i, (line, ts) in enumerate(result):
+        if _is_marker(line):
+            continue
+        if ts <= prev_non_marker_ts:
+            ts = prev_non_marker_ts + 120
+            result[i][1] = ts
+        prev_non_marker_ts = ts
 
     return [(line, ts) for line, ts in result]
 

@@ -25,6 +25,8 @@ from app.lyrics_tag_reader import extract_lyrics_from_mp3
 
 WORK_DIR = Path("/tmp/lyric-sync")
 WORK_DIR.mkdir(parents=True, exist_ok=True)
+CLEANUP_INTERVAL_SECONDS = 600
+MAX_TEMP_AGE_SECONDS = 3600
 
 limiter = Limiter(key_func=get_remote_address)
 semaphore = asyncio.Semaphore(2)
@@ -49,14 +51,24 @@ async def lifespan(app: FastAPI):
         logging.info("Starting background cleanup task...")
         while True:
             try:
-                await asyncio.sleep(600)
+                await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
                 now = time.time()
                 for item in WORK_DIR.iterdir():
-                    if item.is_dir():
+                    try:
                         mtime = item.stat().st_mtime
-                        if (now - mtime) > 3600:
-                            logging.info(f"Cleaning up old job folder: {item.name}")
-                            shutil.rmtree(item)
+                    except FileNotFoundError:
+                        # Item may disappear while iterating.
+                        continue
+
+                    if (now - mtime) <= MAX_TEMP_AGE_SECONDS:
+                        continue
+
+                    if item.is_dir():
+                        logging.info("Cleaning up old job folder: %s", item.name)
+                        shutil.rmtree(item, ignore_errors=True)
+                    else:
+                        logging.info("Cleaning up old temp file: %s", item.name)
+                        item.unlink(missing_ok=True)
             except asyncio.CancelledError:
                 break
             except Exception:

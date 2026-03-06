@@ -234,6 +234,53 @@
             line-height: 1.4;
         }
 
+        .sync-note {
+            border: 1px solid rgba(255, 154, 61, 0.34);
+            border-left: 4px solid var(--accent-2);
+            border-radius: 10px;
+            background: rgba(255, 154, 61, 0.08);
+            color: #ffd3b0;
+            font-size: 0.78rem;
+            line-height: 1.45;
+            padding: 10px;
+            transition: 180ms ease;
+        }
+
+        .sync-note.busy {
+            border-color: rgba(127, 224, 255, 0.4);
+            border-left-color: var(--accent);
+            background: rgba(54, 193, 255, 0.1);
+            color: #d9f4ff;
+            box-shadow: 0 0 0 1px rgba(54, 193, 255, 0.12) inset;
+            animation: sync-note-pulse 1.25s ease-in-out infinite;
+        }
+
+        .sync-note.busy::after {
+            content: ' ...';
+            display: inline-block;
+            width: 1.6em;
+            overflow: hidden;
+            vertical-align: bottom;
+            animation: sync-note-dots 1s steps(4, end) infinite;
+        }
+
+        @keyframes sync-note-pulse {
+            0% {
+                box-shadow: 0 0 0 1px rgba(54, 193, 255, 0.12) inset, 0 0 0 rgba(54, 193, 255, 0.0);
+            }
+            50% {
+                box-shadow: 0 0 0 1px rgba(54, 193, 255, 0.2) inset, 0 0 16px rgba(54, 193, 255, 0.18);
+            }
+            100% {
+                box-shadow: 0 0 0 1px rgba(54, 193, 255, 0.12) inset, 0 0 0 rgba(54, 193, 255, 0.0);
+            }
+        }
+
+        @keyframes sync-note-dots {
+            0% { width: 0; }
+            100% { width: 1.6em; }
+        }
+
         #btn-sync {
             border: none;
             border-radius: 10px;
@@ -424,6 +471,9 @@
                     </div>
                     <input type="file" id="auto-lyrics-file" accept=".txt,text/plain">
                     <textarea id="auto-lyrics-text" class="lyrics-textarea hidden" placeholder="Paste lyrics here..."></textarea>
+                    <div class="sync-note" id="sync-note">
+                        Use lyrics that actually match what is sung in the generated audio. If extracted or pasted lyrics differ from the vocal, alignment quality will drop and timestamps may look wrong.
+                    </div>
                 </div>
 
                 <div class="control-group group-embed" id="embed-mode-group">
@@ -501,6 +551,20 @@
         const embedStatusText = document.getElementById('embed-status-text');
         const timedLrcPanel = document.getElementById('timed-lrc-panel');
         const embedLrcText = document.getElementById('embed-lrc-text');
+        const syncNote = document.getElementById('sync-note');
+
+        const syncNoteDefaultText = 'Use lyrics that actually match what is sung in the generated audio. If extracted or pasted lyrics differ from the vocal, alignment quality will drop and timestamps may look wrong.';
+
+        function setSyncNoteBusy(isBusy) {
+            if (!syncNote) return;
+            if (isBusy) {
+                syncNote.classList.add('busy');
+                syncNote.textContent = 'Sync service is running on the server. This can take a bit depending on audio length and load. Please wait.';
+            } else {
+                syncNote.classList.remove('busy');
+                syncNote.textContent = syncNoteDefaultText;
+            }
+        }
 
         let syncMap = [];
 
@@ -621,6 +685,7 @@
 
             btnSync.disabled = true;
             setStatus('Uploading and syncing… this may take a minute.', true);
+            setSyncNoteBusy(true);
 
             try {
                 const form = new FormData();
@@ -667,6 +732,7 @@
             } finally {
                 btnSync.disabled = false;
                 checkAutoReady();
+                setSyncNoteBusy(false);
             }
         });
 
