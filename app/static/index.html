@@ -69,6 +69,17 @@
                     <input type="file" id="auto-lyrics-file" accept=".txt,text/plain">
                     <textarea id="auto-lyrics-text" class="lyrics-textarea hidden" placeholder="Paste lyrics here..."></textarea>
                 </div>
+                <div class="control-group" id="embed-mode-group">
+                    <label>3. Embed Mode</label>
+                    <div class="choice-row">
+                        <label title="Writes synced LRC text into USLT and TXXX:LYRICS (replaces plain lyrics)">
+                            <input type="radio" name="embed-mode" value="overwrite" checked> Overwrite lyrics tags
+                        </label>
+                        <label title="Writes only the SYLT frame — keeps existing plain (unsynced) lyrics intact">
+                            <input type="radio" name="embed-mode" value="sylt_only"> SYLT only (keep plain lyrics)
+                        </label>
+                    </div>
+                </div>
                 <div class="control-group">
                     <button id="btn-sync" disabled>🔄 Sync Lyrics</button>
                 </div>
@@ -253,6 +264,7 @@
                 const form = new FormData();
                 form.append('mp3', mp3File);
                 form.append('lyrics', lyricPayload, lyricsMode === 'file' ? lyricPayload.name || 'lyrics.txt' : 'lyrics.txt');
+                form.append('embed_mode', document.querySelector('input[name="embed-mode"]:checked').value);
 
                 const resp = await fetch('/sync', { method: 'POST', body: form });
 

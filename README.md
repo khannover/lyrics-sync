@@ -25,6 +25,13 @@ The service will be available at `http://localhost:8000`.
 ### 1. `POST /sync`
 Upload an MP3 and a lyrics file to get a ZIP containing the synced MP3 and an LRC file.
 
+**Parameters:**
+- `mp3` (file): MP3 audio file
+- `lyrics` (file): Plain-text lyrics file (UTF-8)
+- `embed_mode` (string, optional, default `"overwrite"`): Embedding mode.
+  - `"overwrite"`: Removes existing SYLT, USLT, and TXXX:LYRICS frames, then writes all of them with LRC-timestamped text.
+  - `"sylt_only"`: Removes only existing SYLT frames and writes only the SYLT frame — existing plain (unsynced) USLT/TXXX:LYRICS lyrics are preserved.
+
 **Example Curl:**
 ```bash
 curl -X POST "http://localhost:8000/sync" \
@@ -33,14 +40,37 @@ curl -X POST "http://localhost:8000/sync" \
   --output synced_lyrics.zip
 ```
 
+Use `embed_mode=sylt_only` to keep existing plain lyrics intact:
+```bash
+curl -X POST "http://localhost:8000/sync" \
+  -F "mp3=@path/to/song.mp3" \
+  -F "lyrics=@path/to/lyrics.txt" \
+  -F "embed_mode=sylt_only" \
+  --output synced_lyrics.zip
+```
+
 ### 2. `POST /sync/mp3-only`
 Upload an MP3 and a lyrics file to get back a single MP3 file with embedded SYLT lyrics.
+
+**Parameters:**
+- `mp3` (file): MP3 audio file
+- `lyrics` (file): Plain-text lyrics file (UTF-8)
+- `embed_mode` (string, optional, default `"overwrite"`): Embedding mode (same options as `/sync`).
 
 **Example Curl:**
 ```bash
 curl -X POST "http://localhost:8000/sync/mp3-only" \
   -F "mp3=@path/to/song.mp3" \
   -F "lyrics=@path/to/lyrics.txt" \
+  --output song_synced.mp3
+```
+
+Use `embed_mode=sylt_only` to keep existing plain lyrics intact:
+```bash
+curl -X POST "http://localhost:8000/sync/mp3-only" \
+  -F "mp3=@path/to/song.mp3" \
+  -F "lyrics=@path/to/lyrics.txt" \
+  -F "embed_mode=sylt_only" \
   --output song_synced.mp3
 ```
 
