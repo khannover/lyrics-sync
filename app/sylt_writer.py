@@ -9,8 +9,11 @@ Strategy for maximum player compatibility:
 """
 
 from typing import List, Tuple
+import logging
 from mutagen.id3 import ID3, SYLT, USLT, TXXX, Encoding
 from mutagen.mp3 import MP3
+
+logger = logging.getLogger(__name__)
 
 
 def _ms_to_lrc_timestamp(ms: int) -> str:
@@ -72,8 +75,12 @@ def write_sylt_tag(
     for text, timestamp_ms in synced_lyrics:
         sylt_data.append((text + "\n", timestamp_ms))
 
+    # ID3v2.3 does not support UTF-8 text encoding in a fully portable way.
+    # Use UTF-16 to preserve emoji/non-Latin text while keeping v2.3 compatibility.
+    frame_encoding = Encoding.UTF16
+
     audio.tags.add(SYLT(
-        encoding=Encoding.UTF8,
+        encoding=frame_encoding,
         lang=lang,
         desc=desc,
         format=2,   # milliseconds
@@ -86,7 +93,7 @@ def write_sylt_tag(
         lrc_text = _build_lrc(synced_lyrics)
 
         audio.tags.add(USLT(
-            encoding=Encoding.UTF8,
+            encoding=frame_encoding,
             lang=lang,
             desc="synced",
             text=lrc_text,
@@ -94,7 +101,7 @@ def write_sylt_tag(
 
         # Also add a plain USLT without desc for players that expect that
         audio.tags.add(USLT(
-            encoding=Encoding.UTF8,
+            encoding=frame_encoding,
             lang=lang,
             desc="",
             text=lrc_text,
@@ -102,12 +109,17 @@ def write_sylt_tag(
 
         # --- 3. TXXX:LYRICS fallback ---
         audio.tags.add(TXXX(
-            encoding=Encoding.UTF8,
+            encoding=frame_encoding,
             desc="LYRICS",
             text=[lrc_text],
         ))
 
-    audio.save(v2_version=3)  # ID3v2.3 for max compatibility
+    try:
+        audio.save(v2_version=3)  # ID3v2.3 for max compatibility
+    except UnicodeEncodeError:
+        # Last-resort fallback for edge-case chars that fail in v2.3 conversion.
+        logger.warning("Unicode encode issue saving v2.3 tags, retrying as ID3v2.4")
+        audio.save(v2_version=4)
 
 
 def write_lrc_file(

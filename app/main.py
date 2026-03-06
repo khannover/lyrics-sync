@@ -3,10 +3,12 @@ import uuid
 import logging
 import asyncio
 import time
+import re
 from pathlib import Path
 from io import BytesIO
 from zipfile import ZipFile
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -27,6 +29,18 @@ WORK_DIR.mkdir(parents=True, exist_ok=True)
 limiter = Limiter(key_func=get_remote_address)
 semaphore = asyncio.Semaphore(2)
 waiting_jobs = 0
+
+
+def _content_disposition_attachment(filename: str) -> str:
+    """Build a Content-Disposition value that is safe for non-ASCII filenames."""
+    # Header fallback for legacy clients: keep only ASCII printable chars.
+    ascii_fallback = re.sub(r"[^\x20-\x7E]", "_", filename).replace('"', "")
+    if not ascii_fallback.strip():
+        ascii_fallback = "download.zip"
+
+    # RFC 5987 encoding for full UTF-8 filename support.
+    utf8_encoded = quote(filename, safe="")
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -131,7 +145,7 @@ async def sync_lyrics(
             zip_buffer,
             media_type="application/zip",
             headers={
-                "Content-Disposition": f'attachment; filename="{base_name}_synced.zip"'
+                "Content-Disposition": _content_disposition_attachment(f"{base_name}_synced.zip")
             },
         )
     except HTTPException:
@@ -189,7 +203,10 @@ async def sync_lyrics_mp3_only(
         return FileResponse(
             path=str(output_path),
             media_type="audio/mpeg",
-            filename=mp3.filename.replace(".mp3", "_synced.mp3"),
+            filename=re.sub(r"[^\x20-\x7E]", "_", mp3.filename.replace(".mp3", "_synced.mp3")),
+            headers={
+                "Content-Disposition": _content_disposition_attachment(mp3.filename.replace(".mp3", "_synced.mp3"))
+            },
         )
     except HTTPException:
         raise

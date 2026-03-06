@@ -11,8 +11,9 @@ from mutagen.id3 import ID3, SYLT
 from mutagen.mp3 import MP3
 
 # Matches LRC timestamp: [MM:SS.xx] or [M:SS] or [M:SS.xx]
-_LRC_TS_RE = re.compile(r"^\[\d+:\d{2}(?:\.\d+)?\]")
-_LRC_LINE_RE = re.compile(r"^\[(\d+):(\d{2}(?:\.\d+)?)\](.*)")
+_LRC_TS_RE = re.compile(r"^\s*\[\d+:\d{2}(?:\.\d+)?\]")
+_LRC_LINE_RE = re.compile(r"^\s*\[(\d+):(\d{2}(?:\.\d+)?)\](.*)")
+_LYRICS_TXXX_DESCS = {"LYRICS", "LRC", "SYNCEDLYRICS", "UNSYNCEDLYRICS"}
 
 
 def _strip_lrc_timestamps(lrc_text: str) -> str:
@@ -28,6 +29,21 @@ def _strip_lrc_timestamps(lrc_text: str) -> str:
 def _has_lrc_timestamps(text: str) -> bool:
     """Return True if the text contains at least one LRC timestamp line."""
     return any(_LRC_TS_RE.match(line) for line in text.splitlines())
+
+
+def _load_tags(mp3_path: str):
+    """Load tags via MP3 first, with ID3 fallback for edge cases."""
+    try:
+        audio = MP3(mp3_path)
+        if audio.tags is not None:
+            return audio.tags
+    except Exception:
+        pass
+
+    try:
+        return ID3(mp3_path)
+    except Exception:
+        return None
 
 
 def _sylt_to_lrc(sylt_frame: SYLT) -> str:
@@ -58,9 +74,8 @@ def extract_lyrics_from_mp3(mp3_path: str) -> dict:
     plain: Optional[str] = None
     notes_parts = []
 
-    try:
-        tags = ID3(mp3_path)
-    except Exception:
+    tags = _load_tags(mp3_path)
+    if tags is None:
         # No ID3 tags or unreadable file — return empty result
         return {
             "plain_lyrics": None,
@@ -95,26 +110,36 @@ def extract_lyrics_from_mp3(mp3_path: str) -> dict:
     # ── 2. TXXX:LYRICS (case-insensitive desc match) ───────────────────────
     txxx_frames = [
         v for k, v in tags.items()
-        if k.startswith("TXXX") and v.desc.upper() == "LYRICS"
+        if k.startswith("TXXX") and getattr(v, "desc", "").strip().upper() in _LYRICS_TXXX_DESCS
     ]
     if txxx_frames:
         sources["txxx_lyrics"] = True
-        txxx_text = txxx_frames[0].text[0] if txxx_frames[0].text else ""
-        if txxx_text.strip():
+        for frame in txxx_frames:
+            txxx_text = frame.text[0] if frame.text else ""
+            if not isinstance(txxx_text, str):
+                txxx_text = str(txxx_text)
+            txxx_text = txxx_text.strip()
+            if not txxx_text:
+                continue
+
             if timed_lrc is None and _has_lrc_timestamps(txxx_text):
-                timed_lrc = txxx_text.strip()
-            elif plain is None and timed_lrc is None:
-                plain = txxx_text.strip()
+                timed_lrc = txxx_text
+                break
+
+            if plain is None and timed_lrc is None:
+                plain = txxx_text
 
     # ── 3. SYLT frame — convert to LRC as fallback ─────────────────────────
     sylt_frames = [v for k, v in tags.items() if k.startswith("SYLT")]
     if sylt_frames:
         sources["sylt"] = True
         if timed_lrc is None:
-            lrc_from_sylt = _sylt_to_lrc(sylt_frames[0])
-            if lrc_from_sylt.strip():
-                timed_lrc = lrc_from_sylt
-                notes_parts.append("Timed LRC derived from SYLT frame.")
+            for frame in sylt_frames:
+                lrc_from_sylt = _sylt_to_lrc(frame)
+                if lrc_from_sylt.strip():
+                    timed_lrc = lrc_from_sylt
+                    notes_parts.append("Timed LRC derived from SYLT frame.")
+                    break
 
     # ── Derive plain from timed if not already set ─────────────────────────
     if timed_lrc and plain is None:

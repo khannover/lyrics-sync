@@ -2,123 +2,485 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>KAI | Auto-Sync Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KAI | Lyric Sync Console</title>
     <style>
-        :root { --orange: #ff8c00; --dark: #0a0a0a; --dim: rgba(255, 255, 255, 0.2); }
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap');
+
+        :root {
+            --bg: #040b12;
+            --bg-2: #07111c;
+            --panel: rgba(6, 18, 31, 0.92);
+            --panel-soft: rgba(10, 24, 40, 0.78);
+            --border: rgba(74, 122, 173, 0.38);
+            --text: #d7e5f4;
+            --muted: #85a1bc;
+            --accent: #36c1ff;
+            --accent-2: #ff9a3d;
+            --active: #7fe0ff;
+            --shell-width: min(1500px, 98vw);
+        }
+
         * { box-sizing: border-box; }
-        body { background: var(--dark); color: white; font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; margin: 0; height: 100vh; overflow: hidden; }
+        html, body { height: 100%; }
 
-        .dashboard { background: #151515; padding: 18px 18px 14px; width: 95%; max-width: 500px; border-bottom: 2px solid var(--orange); display: flex; flex-direction: column; gap: 12px; margin-top: 10px; z-index: 100; box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
-        .control-group { display: flex; flex-direction: column; flex: 1; min-width: 230px; }
-        label { color: var(--orange); font-size: 0.7rem; text-transform: uppercase; margin-bottom: 5px; letter-spacing: 1px; }
-        input[type="file"] { background: #222; color: #888; border: 1px solid #333; padding: 5px; border-radius: 4px; }
+        body {
+            margin: 0;
+            color: var(--text);
+            font-family: 'IBM Plex Mono', monospace;
+            background:
+                radial-gradient(1000px 540px at 10% -15%, rgba(54, 193, 255, 0.16), transparent 60%),
+                radial-gradient(1000px 540px at 100% 0%, rgba(255, 154, 61, 0.13), transparent 65%),
+                linear-gradient(165deg, var(--bg), var(--bg-2));
+            display: grid;
+            grid-template-rows: auto 1fr;
+            overflow: hidden;
+            position: relative;
+        }
 
-        .btn-row { display: flex; align-items: flex-end; gap: 10px; }
-        button { background: var(--orange); color: var(--dark); border: none; padding: 8px 20px; border-radius: 4px; font-weight: bold; font-size: 0.85rem; cursor: pointer; text-transform: uppercase; letter-spacing: 1px; transition: all 0.2s; }
-        button:hover { background: #ffaa33; transform: scale(1.03); }
-        button:disabled { background: #555; color: #888; cursor: not-allowed; transform: none; }
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background: repeating-linear-gradient(
+                to bottom,
+                rgba(255, 255, 255, 0.02) 0,
+                rgba(255, 255, 255, 0.02) 1px,
+                transparent 2px,
+                transparent 4px
+            );
+            opacity: 0.17;
+            mix-blend-mode: soft-light;
+        }
 
-        .choice-row { display: flex; gap: 12px; align-items: center; margin: 4px 0 8px; }
-        .inline-row { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; }
-        .choice-row label { color: #ccc; font-size: 0.8rem; text-transform: none; letter-spacing: 0; }
-        .lyrics-textarea { width: 100%; min-height: 120px; background: #1c1c1c; color: #f2f2f2; border: 1px solid #333; border-radius: 4px; padding: 10px; resize: vertical; font-family: 'Segoe UI', sans-serif; }
+        .masthead {
+            width: var(--shell-width);
+            margin: 12px auto 10px;
+            padding: 12px 16px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: rgba(4, 14, 24, 0.76);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            backdrop-filter: blur(7px);
+        }
+
+        .brand {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--accent);
+            font-size: 1.02rem;
+        }
+
+        .subtitle {
+            color: var(--muted);
+            font-size: 0.78rem;
+        }
+
+        .app-shell {
+            width: var(--shell-width);
+            margin: 0 auto 12px;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(360px, 460px) 1fr;
+            gap: 14px;
+        }
+
+        .control-panel,
+        .viewer-panel {
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            background: var(--panel);
+            box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
+            min-height: 0;
+        }
+
+        .control-panel {
+            display: flex;
+            flex-direction: column;
+            padding: 14px;
+            overflow: auto;
+            gap: 12px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+            padding: 4px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .tab {
+            flex: 1;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            padding: 8px 10px;
+            color: var(--muted);
+            font-size: 0.74rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            cursor: pointer;
+            transition: 180ms ease;
+        }
+
+        .tab:hover { color: var(--text); border-color: rgba(127, 224, 255, 0.4); }
+
+        .tab.active {
+            color: #001422;
+            background: linear-gradient(135deg, var(--active), var(--accent));
+            border-color: transparent;
+            font-weight: 700;
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;            
+            margin-top: 50px;
+
+        }
+
+        .control-group {
+            border: 1px solid rgba(124, 171, 221, 0.24);
+            border-radius: 12px;
+            background: var(--panel-soft);
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        label {
+            color: var(--accent-2);
+            font-size: 0.73rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            font-weight: 700;
+        }
+
+        input[type="file"], textarea {
+            width: 100%;
+            border: 1px solid rgba(124, 171, 221, 0.3);
+            border-radius: 10px;
+            background: #020914;
+            color: var(--text);
+            padding: 10px;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.88rem;
+        }
+
+        input[type="file"]::file-selector-button {
+            border: 1px solid rgba(127, 224, 255, 0.42);
+            border-radius: 6px;
+            padding: 6px 10px;
+            margin-right: 10px;
+            color: #051624;
+            background: linear-gradient(135deg, var(--active), var(--accent));
+            font-family: 'IBM Plex Mono', monospace;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        textarea { min-height: 120px; resize: vertical; }
+        .lyrics-textarea { min-height: 120px; }
         .hidden { display: none; }
-        .embedded-lyrics-panel { background: #111; border: 1px solid #2a2a2a; border-radius: 4px; padding: 10px; margin-top: 6px; }
-        .embedded-lyrics-panel summary { color: var(--orange); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; cursor: pointer; user-select: none; }
-        .embedded-lyrics-panel textarea { width: 100%; min-height: 80px; background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a; border-radius: 4px; padding: 8px; font-family: 'Segoe UI', sans-serif; font-size: 0.78rem; resize: vertical; margin-top: 8px; }
-        .embed-status { font-size: 0.73rem; padding: 4px 0 2px; }
 
-        .status-bar { margin-top: 30px; width: 95%; max-width: 500px; padding: 8px 15px; font-size: 0.75rem; color: #888; background: #111; border-bottom: 1px solid #222; min-height: 30px; display: flex; align-items: center; gap: 10px; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }
-        .status-bar .spinner { width: 14px; height: 14px; border: 2px solid #555; border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; display: none; }
+        .choice-row {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .choice-row label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0;
+            color: var(--muted);
+            text-transform: none;
+            letter-spacing: 0;
+            font-size: 0.96rem;
+            border: 1px solid rgba(124, 171, 221, 0.3);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.04);
+            padding: 9px 10px;
+            cursor: pointer;
+            transition: 160ms ease;
+        }
+
+        .choice-row label:hover {
+            border-color: rgba(127, 224, 255, 0.5);
+            background: rgba(74, 122, 173, 0.22);
+        }
+
+        .choice-row input[type="radio"] {
+            accent-color: var(--accent-2);
+            width: 16px;
+            height: 16px;
+        }
+
+        .embed-note {
+            font-size: 0.78rem;
+            color: var(--muted);
+            line-height: 1.4;
+        }
+
+        #btn-sync {
+            border: none;
+            border-radius: 10px;
+            min-height: 48px;
+            background: linear-gradient(135deg, var(--accent-2), #ff6d1f);
+            color: #201205;
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            font-size: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.09em;
+            cursor: pointer;
+            box-shadow: 0 12px 28px rgba(255, 109, 31, 0.25);
+            transition: 180ms ease;
+        }
+
+        #btn-sync:hover { transform: translateY(-1px); filter: brightness(1.05); }
+        #btn-sync:disabled {
+            background: #33455b;
+            color: #89a0ba;
+            cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
+            filter: none;
+        }
+
+        #embedded-lyrics-wrap {
+            border: 1px solid rgba(124, 171, 221, 0.24);
+            border-radius: 12px;
+            background: rgba(2, 9, 20, 0.65);
+            padding: 10px;
+        }
+
+        .embed-status {
+            color: var(--muted);
+            font-size: 0.83rem;
+            margin-bottom: 6px;
+        }
+
+        .embedded-lyrics-panel {
+            border: 1px solid rgba(124, 171, 221, 0.24);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 10px;
+        }
+
+        .embedded-lyrics-panel summary {
+            color: var(--accent);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .embedded-lyrics-panel textarea {
+            min-height: 90px;
+            margin-top: 8px;
+        }
+
+        .viewer-panel {
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            overflow: hidden;
+        }
+
+        .status-bar {
+            margin: 12px 12px 0;
+            padding: 10px 12px;
+            border: 1px solid rgba(124, 171, 221, 0.3);
+            border-radius: 10px;
+            background: rgba(3, 10, 19, 0.75);
+            color: var(--muted);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-height: 40px;
+            font-size: 0.85rem;
+        }
+
+        .status-bar.loading { color: var(--text); }
+
+        .status-bar .spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(124, 171, 221, 0.45);
+            border-top-color: var(--accent-2);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            display: none;
+        }
+
         .status-bar.loading .spinner { display: inline-block; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        .tabs { display: flex; gap: 0; width: 100%; }
-        .tab { padding: 8px 20px; background: #1a1a1a; color: #666; cursor: pointer; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; border-bottom: 2px solid transparent; transition: all 0.2s; }
-        .tab.active { color: var(--orange); border-bottom-color: var(--orange); background: #151515; }
+        #lyrics-window {
+            margin: 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(124, 171, 221, 0.22);
+            background: rgba(2, 8, 16, 0.65);
+            overflow-y: auto;
+            text-align: center;
+            scroll-behavior: smooth;
+            mask-image: linear-gradient(transparent, black 18%, black 82%, transparent);
+            -webkit-mask-image: linear-gradient(transparent, black 18%, black 82%, transparent);
+        }
 
-        .tab-content { display: none; }
-        .tab-content.active { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+        #lyrics-content { padding: 16vh 0; }
 
-        #lyrics-window { flex-grow: 1; width: 100%; overflow-y: auto; scroll-behavior: smooth; text-align: center; mask-image: linear-gradient(transparent, black 35%, black 65%, transparent); -webkit-mask-image: linear-gradient(transparent, black 35%, black 65%, transparent); }
-        #lyrics-content { padding: 20vh 0; }
-        .lyric-line { padding: 20px; font-size: 1.8rem; color: var(--dim); filter: blur(3px); transition: all 0.5s ease; transform: scale(0.85); cursor: pointer; }
-        .lyric-line:hover { filter: blur(1px); color: rgba(255,255,255,0.4); }
-        .active { color: var(--orange) !important; filter: blur(0px) !important; transform: scale(1.35) !important; text-shadow: 0 0 15px var(--orange), 0 0 30px rgba(255, 140, 0, 0.4); font-weight: bold; }
+        .lyric-line {
+            padding: 15px 16px;
+            font-size: clamp(1.02rem, 2.2vw, 1.7rem);
+            color: rgba(215, 229, 244, 0.3);
+            filter: blur(1.7px);
+            transform: scale(0.9);
+            transition: 260ms ease;
+            cursor: pointer;
+        }
 
-        .player-container { width: 100%; background: #111; padding: 10px 0; display: flex; justify-content: center; }
-        audio { width: 80%; max-width: 800px; filter: invert(100%) hue-rotate(180deg) brightness(1.5); }
-        #tab-auto { margin-top: 20px; }
+        .lyric-line:hover {
+            color: rgba(215, 229, 244, 0.6);
+            filter: blur(0.6px);
+        }
+
+        .active {
+            color: var(--accent-2) !important;
+            filter: blur(0) !important;
+            transform: scale(1.12) !important;
+            text-shadow: 0 0 14px rgba(255, 154, 61, 0.45);
+            font-weight: 700;
+        }
+
+        .player-container {
+            border-top: 1px solid rgba(124, 171, 221, 0.24);
+            background: rgba(4, 12, 22, 0.84);
+            padding: 10px 12px;
+            display: flex;
+            justify-content: center;
+        }
+
+        audio { width: min(960px, 98%); }
+
+        @media (max-width: 1080px) {
+            .app-shell {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto 1fr;
+            }
+
+            .control-panel { max-height: 50vh; }
+        }
+
+        @media (max-width: 720px) {
+            .masthead {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .tab { font-size: 0.68rem; }
+            .control-panel { padding: 10px; }
+            #lyrics-content { padding: 12vh 0; }
+        }
     </style>
 </head>
 <body>
-    <div class="dashboard">
-        <!-- Tab 1: Auto-sync via API -->
-        <div class="tab-content active" id="tab-auto">
-            <div class="inline-row">
-                <div class="control-group">
+    <header class="masthead">
+        <div class="brand">KAI LYRIC SYNC CONSOLE</div>
+        <div class="subtitle">Whisper alignment + ID3 embedding controls</div>
+    </header>
+
+    <main class="app-shell">
+        <section class="control-panel">
+            <div class="tabs">
+                <div class="tab active" data-tab="auto">Auto Sync API</div>
+                <div class="tab" data-tab="manual">Manual LRC Preview</div>
+            </div>
+
+            <div class="tab-content active" id="tab-auto">
+                <div class="control-group group-audio">
                     <label>1. Select Audio (.mp3)</label>
                     <input type="file" id="auto-audio" accept=".mp3,audio/mpeg">
                 </div>
-                <div class="control-group">
+
+                <div class="control-group group-lyrics">
                     <label>2. Lyrics Source</label>
-                    <div class="choice-row">
+                    <div class="choice-row vertical">
                         <label><input type="radio" name="lyrics-source" value="file" checked> Upload file</label>
                         <label><input type="radio" name="lyrics-source" value="text"> Paste text</label>
                     </div>
                     <input type="file" id="auto-lyrics-file" accept=".txt,text/plain">
                     <textarea id="auto-lyrics-text" class="lyrics-textarea hidden" placeholder="Paste lyrics here..."></textarea>
                 </div>
-                <div class="control-group" id="embed-mode-group">
+
+                <div class="control-group group-embed" id="embed-mode-group">
                     <label>3. Embed Mode</label>
-                    <div class="choice-row">
+                    <div class="choice-row vertical">
                         <label title="Writes synced LRC text into USLT and TXXX:LYRICS (replaces plain lyrics)">
                             <input type="radio" name="embed-mode" value="overwrite" checked> Overwrite lyrics tags
                         </label>
-                        <label title="Writes only the SYLT frame — keeps existing plain (unsynced) lyrics intact">
+                        <label title="Writes only the SYLT frame and keeps existing plain lyrics intact">
                             <input type="radio" name="embed-mode" value="sylt_only"> SYLT only (keep plain lyrics)
                         </label>
                     </div>
+                    <div class="embed-note">`overwrite` updates USLT + TXXX:LYRICS with synced content. `sylt_only` writes only SYLT and preserves plain text tags.</div>
+                </div>
+
+                <div class="control-group group-action">
+                    <label>4. Run</label>
+                    <button id="btn-sync" disabled>Sync Lyrics</button>
+                </div>
+
+                <div id="embedded-lyrics-wrap" class="hidden">
+                    <div class="embed-status" id="embed-status-text"></div>
+                    <details class="embedded-lyrics-panel" id="timed-lrc-panel">
+                        <summary>Timed Lyrics (LRC)</summary>
+                        <textarea id="embed-lrc-text" readonly></textarea>
+                    </details>
+                </div>
+            </div>
+
+            <div class="tab-content" id="tab-manual">
+                <div class="control-group">
+                    <label>1. Select Audio (.mp3)</label>
+                    <input type="file" id="manual-audio" accept=".mp3,audio/mpeg">
                 </div>
                 <div class="control-group">
-                    <button id="btn-sync" disabled>🔄 Sync Lyrics</button>
+                    <label>2. Paste Sync Data (LRC text)</label>
+                    <textarea id="manual-lrc-text" class="lyrics-textarea" placeholder="Paste LRC content here..."></textarea>
                 </div>
             </div>
-            <!-- Embedded lyrics panel (shown after MP3 selection) -->
-            <div id="embedded-lyrics-wrap" class="hidden">
-                <div class="embed-status" id="embed-status-text"></div>
-                <details class="embedded-lyrics-panel" id="timed-lrc-panel">
-                    <summary>Timed Lyrics (LRC)</summary>
-                    <textarea id="embed-lrc-text" readonly></textarea>
-                </details>
-            </div>
-        </div>
+        </section>
 
-        <!-- Tab 2: Manual local files -->
-        <div class="tab-content" id="tab-manual">
-            <div class="control-group">
-                <label>1. Select Audio (.mp3)</label>
-                <input type="file" id="manual-audio" accept=".mp3,audio/mpeg">
+        <section class="viewer-panel">
+            <div class="status-bar" id="status-bar">
+                <div class="spinner"></div>
+                <span id="status-text">Ready - select files and click Sync.</span>
             </div>
-            <div class="control-group">
-                <label>2. Paste Sync Data (LRC text)</label>
-                <textarea id="manual-lrc-text" class="lyrics-textarea" placeholder="Paste LRC content here..."></textarea>
+
+            <div id="lyrics-window">
+                <div id="lyrics-content">
+                    <div class="lyric-line active">Waiting for files...</div>
+                    <div class="lyric-line">Upload an MP3 and lyrics to auto-sync, or load local files.</div>
+                </div>
             </div>
-        </div>
-    </div>
 
-    <div class="status-bar" id="status-bar">
-        <div class="spinner"></div>
-        <span id="status-text">Ready — select files and click Sync.</span>
-    </div>
-
-    <div id="lyrics-window">
-        <div id="lyrics-content">
-            <div class="lyric-line active">Waiting for files...</div>
-            <div class="lyric-line">Upload an MP3 and lyrics to auto-sync, or load local files.</div>
-        </div>
-    </div>
-    <div class="player-container"><audio id="audio-player" controls></audio></div>
+            <div class="player-container"><audio id="audio-player" controls></audio></div>
+        </section>
+    </main>
 
     <script>
         // ─── Elements ───

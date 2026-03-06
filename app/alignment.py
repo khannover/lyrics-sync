@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import logging
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Tuple
 
@@ -208,7 +209,123 @@ def _transcribe_with_word_timestamps(wav_path: str, lyrics_text: str = None) -> 
         info.language,
         info.language_probability,
     )
+
+    # If VAD was too aggressive (common with music-heavy tracks), retry once without VAD.
+    lyric_word_estimate = len(_normalize(lyrics_text or "").split())
+    if words:
+        span_seconds = max(0.0, words[-1]["end"] - words[0]["start"])
+    else:
+        span_seconds = 0.0
+
+    should_retry_no_vad = (
+        lyric_word_estimate >= 24
+        and (len(words) < max(12, lyric_word_estimate // 3) or span_seconds < 20.0)
+    )
+
+    if should_retry_no_vad:
+        logger.warning(
+            "Low transcription coverage (%d words, %.2fs span). Retrying without VAD.",
+            len(words),
+            span_seconds,
+        )
+        retry_segments, retry_info = model.transcribe(
+            wav_path,
+            beam_size=5,
+            word_timestamps=True,
+            language=language,
+            initial_prompt=initial_prompt,
+            vad_filter=False,
+        )
+
+        retry_words = []
+        for segment in retry_segments:
+            if segment.words:
+                for w in segment.words:
+                    retry_words.append({
+                        "word": w.word.strip(),
+                        "start": w.start,
+                        "end": w.end,
+                    })
+
+        retry_span = (
+            max(0.0, retry_words[-1]["end"] - retry_words[0]["start"])
+            if retry_words else 0.0
+        )
+
+        if len(retry_words) > len(words) or retry_span > span_seconds:
+            logger.info(
+                "Using no-VAD transcription: %d words (%.2fs span, lang: %s, prob: %.2f)",
+                len(retry_words),
+                retry_span,
+                retry_info.language,
+                retry_info.language_probability,
+            )
+            words = retry_words
+
     return words
+
+
+def _get_audio_duration_ms(audio_path: str) -> int:
+    """Return audio duration in milliseconds via ffprobe, or 0 on failure."""
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        audio_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            return 0
+        return int(float(result.stdout.strip()) * 1000)
+    except Exception:
+        return 0
+
+
+def _spread_timestamps_by_lyrics(lyrics_lines: List[str], duration_ms: int) -> List[Tuple[str, int]]:
+    """
+    Deterministic full-song fallback: spread lyric lines across audio duration by word density.
+    """
+    if duration_ms <= 0:
+        return [(line, 0) for line in lyrics_lines]
+
+    non_marker_lines = [
+        i for i, line in enumerate(lyrics_lines)
+        if not _is_marker(line) and _normalize(line)
+    ]
+    if not non_marker_lines:
+        return [(line, 0) for line in lyrics_lines]
+
+    words_per_line = [max(1, len(_normalize(lyrics_lines[i]).split())) for i in non_marker_lines]
+    total_words = sum(words_per_line)
+
+    line_ts = {}
+    cumulative = 0
+    # Leave a small tail so last line does not hard-hit track end.
+    usable_ms = int(duration_ms * 0.96)
+
+    for idx, wcount in zip(non_marker_lines, words_per_line):
+        ratio = cumulative / max(1, total_words)
+        line_ts[idx] = int(ratio * usable_ms)
+        cumulative += wcount
+
+    result = []
+    for i, line in enumerate(lyrics_lines):
+        result.append([line, line_ts.get(i)])
+
+    for i in range(len(result) - 2, -1, -1):
+        if result[i][1] is None and _is_marker(result[i][0]) and result[i + 1][1] is not None:
+            result[i][1] = result[i + 1][1]
+
+    last_known_ts = 0
+    for i in range(len(result)):
+        if result[i][1] is None:
+            result[i][1] = last_known_ts
+        else:
+            last_known_ts = result[i][1]
+
+    return [(line, ts) for line, ts in result]
 
 
 def _align_lines_to_words(
@@ -362,6 +479,83 @@ def _align_lines_to_words(
     return [(line, ts) for line, ts in result]
 
 
+def _align_lines_progressive(
+    lyrics_lines: List[str],
+    whisper_words: List[dict],
+) -> List[Tuple[str, int]]:
+    """
+    Progressive forward alignment fallback.
+
+    For each non-marker lyric line, find the best matching forward window in
+    Whisper words using sequence similarity. This avoids DTW collapse cases
+    where many lines get mapped to just a few early timestamps.
+    """
+    if not whisper_words:
+        return [(line, 0) for line in lyrics_lines]
+
+    whisper_norm = [_normalize(w["word"]) for w in whisper_words]
+    whisper_norm = [w for w in whisper_norm if w]
+    if not whisper_norm:
+        return [(line, 0) for line in lyrics_lines]
+
+    line_ts = {}
+    cursor = 0
+    max_w = len(whisper_norm)
+
+    for line_idx, line in enumerate(lyrics_lines):
+        if _is_marker(line):
+            continue
+
+        line_words = _normalize(line).split()
+        if not line_words:
+            continue
+
+        target = " ".join(line_words)
+        lw_len = len(line_words)
+
+        # Search forward in a bounded window to keep alignment monotonic.
+        start_lo = min(cursor, max_w - 1)
+        start_hi = min(max_w - 1, start_lo + 180)
+
+        best_start = start_lo
+        best_score = -1.0
+
+        for s in range(start_lo, start_hi + 1):
+            # Compare with multiple candidate phrase lengths around lyric length.
+            for span in range(max(1, lw_len - 2), lw_len + 5):
+                e = min(max_w, s + span)
+                if e <= s:
+                    continue
+                cand = " ".join(whisper_norm[s:e])
+                score = SequenceMatcher(None, target, cand).ratio()
+                # Mildly prefer earlier positions on ties to reduce jumps.
+                score_adj = score - ((s - start_lo) * 0.0004)
+                if score_adj > best_score:
+                    best_score = score_adj
+                    best_start = s
+
+        line_ts[line_idx] = int(whisper_words[best_start]["start"] * 1000)
+        cursor = min(max_w - 1, best_start + max(1, lw_len - 1))
+
+    # Build result and keep markers aligned with neighboring lyrics.
+    result = []
+    for i, line in enumerate(lyrics_lines):
+        result.append([line, line_ts.get(i)])
+
+    for i in range(len(result) - 2, -1, -1):
+        if result[i][1] is None and _is_marker(result[i][0]) and result[i + 1][1] is not None:
+            result[i][1] = result[i + 1][1]
+
+    last_known_ts = 0
+    for i in range(len(result)):
+        if result[i][1] is None:
+            result[i][1] = last_known_ts
+        else:
+            last_known_ts = result[i][1]
+
+    return [(line, ts) for line, ts in result]
+
+
 def align_lyrics_to_audio(
     mp3_path: str,
     lyrics_text: str,
@@ -384,6 +578,45 @@ def align_lyrics_to_audio(
 
     # Align user lyrics to whisper timestamps
     synced = _align_lines_to_words(lyrics_lines, whisper_words)
+
+    # If DTW output collapsed to very few timestamps, retry with progressive matcher.
+    non_marker_ts = [
+        ts for line, ts in synced
+        if not _is_marker(line) and _normalize(line)
+    ]
+    unique_ratio = (len(set(non_marker_ts)) / max(1, len(non_marker_ts))) if non_marker_ts else 0
+    if len(non_marker_ts) > 6 and unique_ratio < 0.35:
+        logger.warning(
+            "Low DTW timestamp diversity (%d unique / %d lines). Falling back to progressive matching.",
+            len(set(non_marker_ts)),
+            len(non_marker_ts),
+        )
+        synced = _align_lines_progressive(lyrics_lines, whisper_words)
+
+    # Final guardrail: if timestamps still cover only a tiny early segment,
+    # spread lines across the full track duration.
+    final_non_marker_ts = [
+        ts for line, ts in synced
+        if not _is_marker(line) and _normalize(line)
+    ]
+    final_unique_ratio = (
+        len(set(final_non_marker_ts)) / max(1, len(final_non_marker_ts))
+        if final_non_marker_ts else 0.0
+    )
+    max_ts = max(final_non_marker_ts) if final_non_marker_ts else 0
+    duration_ms = _get_audio_duration_ms(wav_path)
+
+    if duration_ms > 0 and len(final_non_marker_ts) > 6 and (
+        final_unique_ratio < 0.45 or max_ts < int(duration_ms * 0.25)
+    ):
+        logger.warning(
+            "Timestamp coverage still low (unique_ratio=%.2f, max_ts=%dms, duration=%dms). "
+            "Applying full-song proportional fallback.",
+            final_unique_ratio,
+            max_ts,
+            duration_ms,
+        )
+        synced = _spread_timestamps_by_lyrics(lyrics_lines, duration_ms)
 
     logger.info("Alignment complete: %d lines", len(synced))
     for line, ts in synced[:5]:
