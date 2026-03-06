@@ -287,19 +287,55 @@ def _align_lines_to_words(
         logger.error("DTW failed: %s", e)
         return [(line, 0) for line in lyrics_lines]
 
-    # Map each lyrics word to its best Whisper word match
-    lyrics_to_whisper = {}
+    # DTW can map one lyric word to multiple whisper words (and vice versa).
+    # Use the median whisper index for each lyric word to avoid "first-hit" collapse.
+    lyric_word_to_whisper_candidates = {}
     for l_idx, w_idx in zip(alignment.index1, alignment.index2):
-        if l_idx not in lyrics_to_whisper:
-            lyrics_to_whisper[l_idx] = w_idx
+        lyric_word_to_whisper_candidates.setdefault(l_idx, []).append(w_idx)
 
-    # For each lyrics line, find the timestamp of its first word
-    line_timestamps = {}
+    lyric_word_to_whisper = {}
+    for l_idx, candidates in lyric_word_to_whisper_candidates.items():
+        lyric_word_to_whisper[l_idx] = int(np.median(candidates))
+
+    # Build per-line candidate whisper indices from all words in that line,
+    # then pick the earliest aligned index as the line start.
+    line_whisper_idx_candidates = {}
     for lw_idx, (_, line_idx) in enumerate(lyrics_word_entries):
-        if line_idx not in line_timestamps and lw_idx in lyrics_to_whisper:
-            w_idx = lyrics_to_whisper[lw_idx]
-            start_ms = int(whisper_words[w_idx]["start"] * 1000)
-            line_timestamps[line_idx] = start_ms
+        if lw_idx in lyric_word_to_whisper:
+            line_whisper_idx_candidates.setdefault(line_idx, []).append(lyric_word_to_whisper[lw_idx])
+
+    line_timestamps = {}
+    for line_idx, idx_candidates in line_whisper_idx_candidates.items():
+        if idx_candidates:
+            w_idx = min(idx_candidates)
+            line_timestamps[line_idx] = int(whisper_words[w_idx]["start"] * 1000)
+
+    # Fallback when alignment collapses into one (or almost one) timestamp.
+    non_marker_lines = [
+        i for i, line in enumerate(lyrics_lines)
+        if not _is_marker(line) and _normalize(line)
+    ]
+    non_marker_ts = [line_timestamps[i] for i in non_marker_lines if i in line_timestamps]
+    if len(non_marker_lines) > 1 and len(set(non_marker_ts)) <= 1:
+        logger.warning(
+            "Low timestamp diversity detected (%d unique for %d lines). Applying proportional fallback.",
+            len(set(non_marker_ts)),
+            len(non_marker_lines),
+        )
+
+        lyric_words_per_line = [
+            len(_normalize(lyrics_lines[i]).split()) for i in non_marker_lines
+        ]
+        total_lyric_words = sum(lyric_words_per_line)
+        max_whisper_idx = len(whisper_words) - 1
+
+        if total_lyric_words > 0 and max_whisper_idx >= 0:
+            cumulative = 0
+            for i, word_count in zip(non_marker_lines, lyric_words_per_line):
+                ratio = cumulative / total_lyric_words
+                w_idx = min(max_whisper_idx, int(round(ratio * max_whisper_idx)))
+                line_timestamps[i] = int(whisper_words[w_idx]["start"] * 1000)
+                cumulative += max(word_count, 1)
 
     # Build final result, inheriting timestamps intelligently
     result = []
