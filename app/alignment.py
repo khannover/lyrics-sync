@@ -187,7 +187,7 @@ def _transcribe_with_word_timestamps(wav_path: str, lyrics_text: str = None) -> 
 
     segments, info = model.transcribe(
         wav_path,
-        beam_size=5,
+        beam_size=1,
         word_timestamps=True,
         language=language,  # Use our hint or None for auto-detect
         initial_prompt=initial_prompt,
