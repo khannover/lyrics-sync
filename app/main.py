@@ -171,6 +171,9 @@ async def sync_lyrics(
         with open(mp3_path, "wb") as f:
             shutil.copyfileobj(mp3.file, f)
 
+        if mp3_path.stat().st_size == 0:
+            raise HTTPException(status_code=400, detail="Uploaded MP3 file is empty.")
+
         mp3_path = _ensure_taggable_mp3(mp3_path, job_dir)
 
         with open(lyrics_path, "wb") as f:
@@ -242,6 +245,9 @@ async def sync_lyrics_mp3_only(
 
         with open(mp3_path, "wb") as f:
             shutil.copyfileobj(mp3.file, f)
+
+        if mp3_path.stat().st_size == 0:
+            raise HTTPException(status_code=400, detail="Uploaded MP3 file is empty.")
 
         mp3_path = _ensure_taggable_mp3(mp3_path, job_dir)
 
