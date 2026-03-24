@@ -191,8 +191,7 @@ def _transcribe_with_word_timestamps(wav_path: str, lyrics_text: str = None) -> 
         word_timestamps=True,
         language=language,  # Use our hint or None for auto-detect
         initial_prompt=initial_prompt,
-        vad_filter=True, # Significantly improves robustness to music/silence
-        vad_parameters=dict(min_silence_duration_ms=500),
+        vad_filter=False,
     )
 
     words = []
@@ -211,58 +210,6 @@ def _transcribe_with_word_timestamps(wav_path: str, lyrics_text: str = None) -> 
         info.language,
         info.language_probability,
     )
-
-    # If VAD was too aggressive (common with music-heavy tracks), retry once without VAD.
-    lyric_word_estimate = len(_normalize(lyrics_text or "").split())
-    if words:
-        span_seconds = max(0.0, words[-1]["end"] - words[0]["start"])
-    else:
-        span_seconds = 0.0
-
-    should_retry_no_vad = (
-        lyric_word_estimate >= 24
-        and (len(words) < max(12, lyric_word_estimate // 3) or span_seconds < 20.0)
-    )
-
-    if should_retry_no_vad:
-        logger.warning(
-            "Low transcription coverage (%d words, %.2fs span). Retrying without VAD.",
-            len(words),
-            span_seconds,
-        )
-        retry_segments, retry_info = model.transcribe(
-            wav_path,
-            beam_size=5,
-            word_timestamps=True,
-            language=language,
-            initial_prompt=initial_prompt,
-            vad_filter=False,
-        )
-
-        retry_words = []
-        for segment in retry_segments:
-            if segment.words:
-                for w in segment.words:
-                    retry_words.append({
-                        "word": w.word.strip(),
-                        "start": w.start,
-                        "end": w.end,
-                    })
-
-        retry_span = (
-            max(0.0, retry_words[-1]["end"] - retry_words[0]["start"])
-            if retry_words else 0.0
-        )
-
-        if len(retry_words) > len(words) or retry_span > span_seconds:
-            logger.info(
-                "Using no-VAD transcription: %d words (%.2fs span, lang: %s, prob: %.2f)",
-                len(retry_words),
-                retry_span,
-                retry_info.language,
-                retry_info.language_probability,
-            )
-            words = retry_words
 
     return words
 
