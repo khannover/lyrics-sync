@@ -115,6 +115,8 @@ def _get_model():
 
 def _convert_to_wav(mp3_path: str, job_dir: str) -> str:
     """Convert MP3 to 16 kHz mono WAV."""
+    if not os.path.exists(mp3_path):
+        raise FileNotFoundError(f"Input audio file not found: {mp3_path}")
     wav_path = os.path.join(job_dir, "audio.wav")
     cmd = [
         "ffmpeg", "-y", "-i", mp3_path,
