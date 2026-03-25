@@ -18,7 +18,31 @@ The easiest way to run the service is using Docker Compose:
 docker-compose up --build
 ```
 
-The service will be available at `http://localhost:8000`.
+The service will be available at `http://localhost:8005`.
+
+Docker Compose now starts three services:
+- `nginx`: public HTTP entrypoint on port `8005`
+- `lyric-sync`: internal FastAPI app on Docker-network port `8000`
+- `tarpit`: internal slow sink for obvious bot and scanner traffic
+
+This setup stays HTTP-only. It does not require a domain name, TLS certificates, or any HTTPS configuration.
+
+## Bot Mitigation
+
+Nginx sits in front of the app and diverts obvious scan traffic to a tarpit service before those requests reach FastAPI. The tarpit intentionally responds slowly so common probes spend time outside the main application.
+
+Examples of traffic diverted by Nginx include requests for paths such as:
+- `/_next`
+- `/actuator/*`
+- `/geoserver/*`
+- `/admin/*`
+- `/manage/*`
+- `/models/edit/nuclei_rce_test`
+- `/chat/completions`
+- `/SDK/webLanguage`
+- suspicious query probes like `?XDEBUG_SESSION_START=...`
+
+The app still keeps endpoint rate limiting enabled as a backup control for requests that reach FastAPI.
 
 ## API Endpoints
 

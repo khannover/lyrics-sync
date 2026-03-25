@@ -14,7 +14,6 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from mutagen.mp3 import MP3, HeaderNotFoundError
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -31,7 +30,15 @@ WORK_DIR.mkdir(parents=True, exist_ok=True)
 CLEANUP_INTERVAL_SECONDS = 600
 MAX_TEMP_AGE_SECONDS = 3600
 
-limiter = Limiter(key_func=get_remote_address)
+def _get_client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
+
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_get_client_ip)
 semaphore = asyncio.Semaphore(2)
 waiting_jobs = 0
 SYNC_RATE_LIMIT = os.environ.get("SYNC_RATE_LIMIT", "60/hour")
