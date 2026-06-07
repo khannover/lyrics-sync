@@ -18,7 +18,7 @@ services:
       - model-cache:/app/models
       - /tmp/lyric-sync:/tmp/lyric-sync
     environment:
-      - MODEL_SIZE=base
+      - MODEL_SIZE=small
       - SYNC_RATE_LIMIT=60/hour
     restart: unless-stopped
 
