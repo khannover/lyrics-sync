@@ -11,14 +11,20 @@ services:
     restart: unless-stopped
 
   lyric-sync:
-    build: .
+    build:
+      context: .
+      args:
+        MODEL_SIZE: medium
     expose:
       - "8000"
     volumes:
       - model-cache:/app/models
-      - /tmp/lyric-sync:/tmp/lyric-sync
+      - lyric-sync-work:/tmp/lyric-sync
     environment:
-      - MODEL_SIZE=small
+      - MODEL_SIZE=medium
+      - WHISPER_COMPUTE_TYPE=int8
+      - WHISPER_CPU_THREADS=4
+      - MAX_CONCURRENT_JOBS=1
       - SYNC_RATE_LIMIT=60/hour
     restart: unless-stopped
 
@@ -35,3 +41,4 @@ services:
 
 volumes:
   model-cache:
+  lyric-sync-work:

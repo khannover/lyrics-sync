@@ -10,9 +10,10 @@ import os
 import re
 import subprocess
 import logging
+import time
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from dtw import dtw
@@ -20,7 +21,20 @@ from scipy.spatial.distance import cdist
 
 logger = logging.getLogger(__name__)
 
+
+def _job_log(job_id: Optional[str], event: str, **fields) -> None:
+    parts = ["[sync]"]
+    if job_id:
+        parts.append(f"job={job_id}")
+    parts.append(event)
+    for key, value in fields.items():
+        parts.append(f"{key}={value}")
+    logger.info(" ".join(parts))
+
+
 MODEL_SIZE = os.environ.get("MODEL_SIZE", "base")
+COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+CPU_THREADS = int(os.environ.get("WHISPER_CPU_THREADS", "4"))
 MODEL_DIR = Path("/app/models")
 
 _model = None
@@ -35,7 +49,8 @@ def ensure_model():
     model = WhisperModel(
         MODEL_SIZE,
         device="cpu",
-        compute_type="int8",
+        compute_type=COMPUTE_TYPE,
+        cpu_threads=CPU_THREADS,
         download_root=str(MODEL_DIR),
     )
     # Quick test
@@ -61,7 +76,8 @@ def _get_model():
             _model = WhisperModel(
                 MODEL_SIZE,
                 device="cpu",
-                compute_type="int8",
+                compute_type=COMPUTE_TYPE,
+                cpu_threads=CPU_THREADS,
                 download_root=str(MODEL_DIR),
                 local_files_only=True,
             )
@@ -104,20 +120,30 @@ def _get_model():
             _model = WhisperModel(
                 MODEL_SIZE,
                 device="cpu",
-                compute_type="int8",
+                compute_type=COMPUTE_TYPE,
+                cpu_threads=CPU_THREADS,
                 download_root=str(MODEL_DIR),
-                local_files_only=False, 
+                local_files_only=False,
             )
             logger.info("Model downloaded and loaded.")
 
     return _model
 
 
-def _convert_to_wav(mp3_path: str, job_dir: str) -> str:
+def _convert_to_wav(mp3_path: str, job_dir: str, job_id: Optional[str] = None) -> str:
     """Convert MP3 to 16 kHz mono WAV."""
     if not os.path.exists(mp3_path):
         raise FileNotFoundError(f"Input audio file not found: {mp3_path}")
     wav_path = os.path.join(job_dir, "audio.wav")
+    mp3_name = Path(mp3_path).name
+    mp3_bytes = os.path.getsize(mp3_path)
+    _job_log(
+        job_id,
+        "stage=convert_start",
+        file=mp3_name,
+        mp3_bytes=mp3_bytes,
+    )
+    started = time.monotonic()
     cmd = [
         "ffmpeg", "-y", "-i", mp3_path,
         "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav_path,
@@ -125,6 +151,15 @@ def _convert_to_wav(mp3_path: str, job_dir: str) -> str:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg failed: {result.stderr}")
+    elapsed = time.monotonic() - started
+    duration_ms = _get_audio_duration_ms(wav_path)
+    _job_log(
+        job_id,
+        "stage=convert_done",
+        file=mp3_name,
+        elapsed=f"{elapsed:.1f}s",
+        duration_ms=duration_ms,
+    )
     return wav_path
 
 
@@ -147,7 +182,11 @@ def _is_marker(text: str) -> bool:
     return False
 
 
-def _transcribe_with_word_timestamps(wav_path: str, lyrics_text: str = None) -> List[dict]:
+def _transcribe_with_word_timestamps(
+    wav_path: str,
+    lyrics_text: str = None,
+    job_id: Optional[str] = None,
+) -> List[dict]:
     """
     Transcribe audio with word-level timestamps using faster-whisper.
     Returns: [{"word": "hello", "start": 0.0, "end": 0.52}, ...]
@@ -182,8 +221,13 @@ def _transcribe_with_word_timestamps(wav_path: str, lyrics_text: str = None) -> 
         if prompt_lines:
             initial_prompt = " ".join(prompt_lines[:5])
 
-    logger.info("Transcribing audio (language_hint: %s, initial_prompt: %s)", 
-                language, (initial_prompt[:50] + "...") if initial_prompt else "None")
+    _job_log(
+        job_id,
+        "stage=transcribe_start",
+        language_hint=language or "auto",
+        prompt=(initial_prompt[:50] + "...") if initial_prompt else "none",
+    )
+    started = time.monotonic()
 
     segments, info = model.transcribe(
         wav_path,
@@ -204,11 +248,14 @@ def _transcribe_with_word_timestamps(wav_path: str, lyrics_text: str = None) -> 
                     "end": w.end,
                 })
 
-    logger.info(
-        "Transcribed %d words (detected language: %s, prob: %.2f)",
-        len(words),
-        info.language,
-        info.language_probability,
+    elapsed = time.monotonic() - started
+    _job_log(
+        job_id,
+        "stage=transcribe_done",
+        words=len(words),
+        language=info.language,
+        language_prob=f"{info.language_probability:.2f}",
+        elapsed=f"{elapsed:.1f}s",
     )
 
     return words
@@ -540,12 +587,22 @@ def align_lyrics_to_audio(
     mp3_path: str,
     lyrics_text: str,
     job_dir: str,
+    job_id: Optional[str] = None,
 ) -> List[Tuple[str, int]]:
     """
     Main entry point for alignment.
     Returns: [(line_text, start_time_ms), ...]
     """
-    wav_path = _convert_to_wav(mp3_path, job_dir)
+    job_started = time.monotonic()
+    mp3_name = Path(mp3_path).name
+    _job_log(
+        job_id,
+        "stage=alignment_start",
+        file=mp3_name,
+        model=MODEL_SIZE,
+    )
+
+    wav_path = _convert_to_wav(mp3_path, job_dir, job_id=job_id)
 
     # Parse lyrics into non-empty lines
     lyrics_lines = [l.strip() for l in lyrics_text.splitlines() if l.strip()]
@@ -553,11 +610,28 @@ def align_lyrics_to_audio(
     if not lyrics_lines:
         raise ValueError("No lyrics lines found")
 
+    _job_log(job_id, "stage=lyrics_parsed", lines=len(lyrics_lines))
+
     # Get word-level timestamps from Whisper
-    whisper_words = _transcribe_with_word_timestamps(wav_path, lyrics_text=lyrics_text)
+    whisper_words = _transcribe_with_word_timestamps(
+        wav_path, lyrics_text=lyrics_text, job_id=job_id
+    )
 
     # Align user lyrics to whisper timestamps
+    _job_log(
+        job_id,
+        "stage=dtw_start",
+        lyric_words=sum(len(_normalize(line).split()) for line in lyrics_lines),
+        whisper_words=len(whisper_words),
+    )
+    align_started = time.monotonic()
     synced = _align_lines_to_words(lyrics_lines, whisper_words)
+    _job_log(
+        job_id,
+        "stage=dtw_done",
+        elapsed=f"{time.monotonic() - align_started:.1f}s",
+        lines=len(synced),
+    )
 
     # If DTW output collapsed to very few timestamps, retry with progressive matcher.
     non_marker_ts = [
@@ -571,6 +645,7 @@ def align_lyrics_to_audio(
             len(set(non_marker_ts)),
             len(non_marker_ts),
         )
+        _job_log(job_id, "stage=progressive_fallback")
         synced = _align_lines_progressive(lyrics_lines, whisper_words)
 
     # Final guardrail: if timestamps still cover only a tiny early segment,
@@ -596,12 +671,25 @@ def align_lyrics_to_audio(
             max_ts,
             duration_ms,
         )
+        _job_log(
+            job_id,
+            "stage=proportional_fallback",
+            duration_ms=duration_ms,
+            unique_ratio=f"{final_unique_ratio:.2f}",
+        )
         synced = _spread_timestamps_by_lyrics(lyrics_lines, duration_ms)
 
-    logger.info("Alignment complete: %d lines", len(synced))
-    for line, ts in synced[:5]:
-        logger.info("  [%7d ms] %s", ts, line[:60])
-    if len(synced) > 5:
-        logger.info("  ... and %d more lines", len(synced) - 5)
+    elapsed = time.monotonic() - job_started
+    _job_log(
+        job_id,
+        "stage=alignment_done",
+        file=mp3_name,
+        lines=len(synced),
+        elapsed=f"{elapsed:.1f}s",
+    )
+    for line, ts in synced[:3]:
+        logger.info("[sync] job=%s preview [%dms] %s", job_id or "-", ts, line[:60])
+    if len(synced) > 3:
+        logger.info("[sync] job=%s preview ... and %d more lines", job_id or "-", len(synced) - 3)
 
     return synced

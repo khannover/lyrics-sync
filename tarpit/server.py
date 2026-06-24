@@ -25,13 +25,16 @@ class TarpitHandler(BaseHTTPRequestHandler):
             parts.append(f"{key}={value}")
         print(" ".join(parts), flush=True)
 
-    def _respond(self) -> None:
-        client_ip = self._client_ip()
-        user_agent = self.headers.get("User-Agent", "-")
-        reason = self.headers.get("X-Tarpit-Reason", "unknown")
-        method = self.command
-        path = self.path
-
+    def _delay_and_release(
+        self,
+        client_ip: str,
+        user_agent: str,
+        reason: str,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None = b"Not found\n",
+    ) -> None:
         self._log_event(
             "caught",
             ip=client_ip,
@@ -45,13 +48,18 @@ class TarpitHandler(BaseHTTPRequestHandler):
         time.sleep(DELAY_SECONDS)
         elapsed = time.monotonic() - started
 
-        body = b"Not found\n"
-        self.send_response(STATUS_CODE)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        status = str(STATUS_CODE)
+        try:
+            self.send_response(STATUS_CODE)
+            self.send_header("Cache-Control", "no-store")
+            if body is not None:
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if body is not None:
+                self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            status = "client_gone"
 
         self._log_event(
             "released",
@@ -60,7 +68,16 @@ class TarpitHandler(BaseHTTPRequestHandler):
             path=path,
             reason=reason,
             delay=f"{elapsed:.1f}s",
-            status=str(STATUS_CODE),
+            status=status,
+        )
+
+    def _respond(self) -> None:
+        self._delay_and_release(
+            self._client_ip(),
+            self.headers.get("User-Agent", "-"),
+            self.headers.get("X-Tarpit-Reason", "unknown"),
+            self.command,
+            self.path,
         )
 
     def do_GET(self) -> None:
@@ -76,37 +93,13 @@ class TarpitHandler(BaseHTTPRequestHandler):
         self._respond()
 
     def do_HEAD(self) -> None:
-        client_ip = self._client_ip()
-        user_agent = self.headers.get("User-Agent", "-")
-        reason = self.headers.get("X-Tarpit-Reason", "unknown")
-        method = self.command
-        path = self.path
-
-        self._log_event(
-            "caught",
-            ip=client_ip,
-            method=method,
-            path=path,
-            reason=reason,
-            ua=user_agent,
-        )
-
-        started = time.monotonic()
-        time.sleep(DELAY_SECONDS)
-        elapsed = time.monotonic() - started
-
-        self.send_response(STATUS_CODE)
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-
-        self._log_event(
-            "released",
-            ip=client_ip,
-            method=method,
-            path=path,
-            reason=reason,
-            delay=f"{elapsed:.1f}s",
-            status=str(STATUS_CODE),
+        self._delay_and_release(
+            self._client_ip(),
+            self.headers.get("User-Agent", "-"),
+            self.headers.get("X-Tarpit-Reason", "unknown"),
+            self.command,
+            self.path,
+            body=None,
         )
 
     def do_OPTIONS(self) -> None:

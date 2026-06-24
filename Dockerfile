@@ -42,7 +42,8 @@ COPY app/ ./app/
 RUN mkdir -p /app/models
 
 # Pre-download model at build time
-# Note: This will now use the libraries copied from the builder
+ARG MODEL_SIZE=medium
+ENV MODEL_SIZE=${MODEL_SIZE}
 RUN python -c "from app.alignment import ensure_model; ensure_model()"
 
 EXPOSE 8000

@@ -25,6 +25,8 @@ from app.alignment import align_lyrics_to_audio
 from app.sylt_writer import write_sylt_tag, write_lrc_file
 from app.lyrics_tag_reader import extract_lyrics_from_mp3
 
+logger = logging.getLogger(__name__)
+
 WORK_DIR = Path("/tmp/lyric-sync")
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 CLEANUP_INTERVAL_SECONDS = 600
@@ -39,10 +41,115 @@ def _get_client_ip(request: Request) -> str:
 
 
 limiter = Limiter(key_func=_get_client_ip)
-semaphore = asyncio.Semaphore(2)
+MAX_CONCURRENT_JOBS = max(1, int(os.environ.get("MAX_CONCURRENT_JOBS", "1")))
+semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
 waiting_jobs = 0
+active_job_ids: set[str] = set()
 SYNC_RATE_LIMIT = os.environ.get("SYNC_RATE_LIMIT", "60/hour")
 SYNC_MP3_ONLY_RATE_LIMIT = os.environ.get("SYNC_MP3_ONLY_RATE_LIMIT", SYNC_RATE_LIMIT)
+
+
+def _configure_logging() -> None:
+    level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        force=True,
+    )
+
+
+def _job_log(job_id: str, event: str, **fields) -> None:
+    parts = [f"[sync] job={job_id}", event]
+    for key, value in fields.items():
+        parts.append(f"{key}={value}")
+    logger.info(" ".join(parts))
+
+
+def _register_job(job_id: str) -> None:
+    active_job_ids.add(job_id)
+
+
+def _unregister_job(job_id: str) -> None:
+    active_job_ids.discard(job_id)
+
+
+def _touch_job_dir(job_dir: Path) -> None:
+    try:
+        os.utime(job_dir, None)
+    except OSError:
+        pass
+
+
+def _assert_audio_ready(job_id: str, mp3_path: Path, job_dir: Path) -> None:
+    if mp3_path.exists():
+        return
+
+    try:
+        listing = ", ".join(sorted(p.name for p in job_dir.iterdir()))
+    except OSError as exc:
+        listing = f"<unreadable: {exc}>"
+
+    raise FileNotFoundError(
+        f"Input audio file not found before alignment: {mp3_path} "
+        f"(job_dir listing: {listing or 'empty'})"
+    )
+
+
+async def _run_alignment(
+    job_id: str,
+    mp3_path: Path,
+    lyrics_text: str,
+    job_dir: Path,
+) -> list:
+    global waiting_jobs
+    line_count = len([line for line in lyrics_text.splitlines() if line.strip()])
+    _job_log(
+        job_id,
+        "stage=queued",
+        file=mp3_path.name,
+        lines=line_count,
+        waiting=waiting_jobs,
+        slots=MAX_CONCURRENT_JOBS,
+    )
+
+    waiting_jobs += 1
+    started = time.monotonic()
+    try:
+        async with semaphore:
+            waiting_jobs -= 1
+            _touch_job_dir(job_dir)
+            _assert_audio_ready(job_id, mp3_path, job_dir)
+            mp3_bytes = mp3_path.stat().st_size
+            _job_log(
+                job_id,
+                "stage=align_start",
+                file=mp3_path.name,
+                mp3_bytes=mp3_bytes,
+            )
+            synced = await asyncio.to_thread(
+                align_lyrics_to_audio,
+                str(mp3_path),
+                lyrics_text,
+                job_dir=str(job_dir),
+                job_id=job_id,
+            )
+            _job_log(
+                job_id,
+                "stage=align_finished",
+                file=mp3_path.name,
+                elapsed=f"{time.monotonic() - started:.1f}s",
+                lines=len(synced),
+            )
+            return synced
+    except Exception:
+        _job_log(
+            job_id,
+            "stage=align_failed",
+            file=mp3_path.name,
+            elapsed=f"{time.monotonic() - started:.1f}s",
+        )
+        raise
 
 
 def _content_disposition_attachment(filename: str) -> str:
@@ -68,7 +175,7 @@ def _ensure_taggable_mp3(input_path: Path, job_dir: Path) -> Path:
         MP3(str(input_path))
         return input_path
     except HeaderNotFoundError:
-        logging.warning("Input is not a taggable MP3 stream, transcoding via ffmpeg: %s", input_path.name)
+        logger.warning("Input is not a taggable MP3 stream, transcoding via ffmpeg: %s", input_path.name)
 
     normalized_path = job_dir / "input_normalized.mp3"
     cmd = [
@@ -99,9 +206,12 @@ def _ensure_taggable_mp3(input_path: Path, job_dir: Path) -> Path:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _configure_logging()
+    logger.info("Lyrics sync service started")
+
     # Background cleanup task
     async def cleanup_loop():
-        logging.info("Starting background cleanup task...")
+        logger.info("Starting background cleanup task...")
         while True:
             try:
                 await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
@@ -116,16 +226,19 @@ async def lifespan(app: FastAPI):
                     if (now - mtime) <= MAX_TEMP_AGE_SECONDS:
                         continue
 
+                    if item.name in active_job_ids:
+                        continue
+
                     if item.is_dir():
-                        logging.info("Cleaning up old job folder: %s", item.name)
+                        logger.info("Cleaning up old job folder: %s", item.name)
                         shutil.rmtree(item, ignore_errors=True)
                     else:
-                        logging.info("Cleaning up old temp file: %s", item.name)
+                        logger.info("Cleaning up old temp file: %s", item.name)
                         item.unlink(missing_ok=True)
             except asyncio.CancelledError:
                 break
             except Exception:
-                logging.exception("Error in cleanup task")
+                logger.exception("Error in cleanup task")
 
     cleanup_task = asyncio.create_task(cleanup_loop())
     yield
@@ -170,8 +283,20 @@ async def sync_lyrics(
     job_id = str(uuid.uuid4())
     job_dir = WORK_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
+    _register_job(job_id)
+    request_started = time.monotonic()
+    client_ip = _get_client_ip(request)
 
     try:
+        _job_log(
+            job_id,
+            "stage=request_start",
+            endpoint="/sync",
+            client=client_ip,
+            file=mp3.filename,
+            embed_mode=embed_mode,
+        )
+
         mp3_path = job_dir / "input.mp3"
         lyrics_path = job_dir / "lyrics.txt"
 
@@ -190,27 +315,32 @@ async def sync_lyrics(
         if not lyrics_text:
             raise HTTPException(status_code=400, detail="Lyrics file is empty.")
 
-        global waiting_jobs
-        waiting_jobs += 1
-        async with semaphore:
-            waiting_jobs -= 1
-            synced = await asyncio.to_thread(
-                align_lyrics_to_audio, str(mp3_path), lyrics_text, job_dir=str(job_dir)
-            )
+        synced = await _run_alignment(job_id, mp3_path, lyrics_text, job_dir)
 
         base_name = Path(mp3.filename).stem
         output_mp3 = job_dir / f"{base_name}_synced.mp3"
         output_lrc = job_dir / f"{base_name}_synced.lrc"
 
+        _job_log(job_id, "stage=tagging_start", file=mp3_path.name)
         shutil.copy2(mp3_path, output_mp3)
         write_sylt_tag(str(output_mp3), synced, embed_mode=embed_mode)
         write_lrc_file(str(output_lrc), synced)
+        _job_log(job_id, "stage=tagging_done", file=mp3_path.name)
 
         zip_buffer = BytesIO()
         with ZipFile(zip_buffer, "w") as zf:
             zf.write(output_mp3, f"{base_name}_synced.mp3")
             zf.write(output_lrc, f"{base_name}_synced.lrc")
         zip_buffer.seek(0)
+
+        _job_log(
+            job_id,
+            "stage=request_done",
+            endpoint="/sync",
+            file=mp3.filename,
+            elapsed=f"{time.monotonic() - request_started:.1f}s",
+            zip_bytes=zip_buffer.getbuffer().nbytes,
+        )
 
         return StreamingResponse(
             zip_buffer,
@@ -222,8 +352,10 @@ async def sync_lyrics(
     except HTTPException:
         raise
     except Exception as e:
-        logging.exception("Alignment failed")
+        logger.exception("[sync] job=%s stage=request_failed", job_id)
         raise HTTPException(status_code=500, detail=f"Alignment failed: {e}")
+    finally:
+        _unregister_job(job_id)
 
 
 @app.post("/sync/mp3-only", summary="Upload MP3 + lyrics, get back only the tagged MP3")
@@ -245,8 +377,20 @@ async def sync_lyrics_mp3_only(
     job_id = str(uuid.uuid4())
     job_dir = WORK_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
+    _register_job(job_id)
+    request_started = time.monotonic()
+    client_ip = _get_client_ip(request)
 
     try:
+        _job_log(
+            job_id,
+            "stage=request_start",
+            endpoint="/sync/mp3-only",
+            client=client_ip,
+            file=mp3.filename,
+            embed_mode=embed_mode,
+        )
+
         mp3_path = job_dir / "input.mp3"
         lyrics_path = job_dir / "lyrics.txt"
 
@@ -265,17 +409,22 @@ async def sync_lyrics_mp3_only(
         if not lyrics_text:
             raise HTTPException(status_code=400, detail="Lyrics file is empty.")
 
-        global waiting_jobs
-        waiting_jobs += 1
-        async with semaphore:
-            waiting_jobs -= 1
-            synced = await asyncio.to_thread(
-                align_lyrics_to_audio, str(mp3_path), lyrics_text, job_dir=str(job_dir)
-            )
+        synced = await _run_alignment(job_id, mp3_path, lyrics_text, job_dir)
 
         output_path = job_dir / "output.mp3"
+        _job_log(job_id, "stage=tagging_start", file=mp3_path.name)
         shutil.copy2(mp3_path, output_path)
         write_sylt_tag(str(output_path), synced, embed_mode=embed_mode)
+        _job_log(job_id, "stage=tagging_done", file=mp3_path.name)
+
+        _job_log(
+            job_id,
+            "stage=request_done",
+            endpoint="/sync/mp3-only",
+            file=mp3.filename,
+            elapsed=f"{time.monotonic() - request_started:.1f}s",
+            mp3_bytes=output_path.stat().st_size,
+        )
 
         return FileResponse(
             path=str(output_path),
@@ -288,8 +437,10 @@ async def sync_lyrics_mp3_only(
     except HTTPException:
         raise
     except Exception as e:
-        logging.exception("Alignment failed")
+        logger.exception("[sync] job=%s stage=request_failed", job_id)
         raise HTTPException(status_code=500, detail=f"Alignment failed: {e}")
+    finally:
+        _unregister_job(job_id)
 
 
 @app.post(
@@ -305,18 +456,40 @@ async def lyrics_from_mp3(
     job_id = str(uuid.uuid4())
     job_dir = WORK_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
+    request_started = time.monotonic()
 
     try:
+        _job_log(
+            job_id,
+            "stage=request_start",
+            endpoint="/lyrics/from-mp3",
+            file=mp3.filename,
+        )
+
         mp3_path = job_dir / "input.mp3"
         with open(mp3_path, "wb") as f:
             shutil.copyfileobj(mp3.file, f)
 
+        _job_log(
+            job_id,
+            "stage=extract_start",
+            file=mp3.filename,
+            mp3_bytes=mp3_path.stat().st_size,
+        )
         result = await asyncio.to_thread(extract_lyrics_from_mp3, str(mp3_path))
+        _job_log(
+            job_id,
+            "stage=request_done",
+            endpoint="/lyrics/from-mp3",
+            file=mp3.filename,
+            elapsed=f"{time.monotonic() - request_started:.1f}s",
+            found=",".join(k for k, v in result.get("sources", {}).items() if v) or "none",
+        )
         return result
     except HTTPException:
         raise
     except Exception as e:
-        logging.exception("Lyrics extraction failed")
+        logger.exception("[sync] job=%s stage=request_failed", job_id)
         raise HTTPException(status_code=500, detail=f"Lyrics extraction failed: {e}")
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
@@ -326,8 +499,8 @@ async def lyrics_from_mp3(
 async def get_queue():
     return {
         "waiting_jobs": waiting_jobs,
-        "total_slots": 2,
-        "active_jobs": 2 - semaphore._value
+        "total_slots": MAX_CONCURRENT_JOBS,
+        "active_jobs": MAX_CONCURRENT_JOBS - semaphore._value
     }
 
 
