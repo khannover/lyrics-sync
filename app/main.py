@@ -1,3 +1,4 @@
+import json
 import shutil
 import uuid
 import logging
@@ -13,7 +14,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from mutagen.mp3 import MP3, HeaderNotFoundError
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -21,7 +22,14 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.alignment import align_lyrics_to_audio
+from app.alignment import AlignmentResult, align_lyrics_to_audio
+from app.async_jobs import (
+    create_job,
+    get_job,
+    queue_stats,
+    start_worker,
+    stop_worker,
+)
 from app.sylt_writer import write_sylt_tag, write_lrc_file
 from app.lyrics_tag_reader import extract_lyrics_from_mp3
 
@@ -101,7 +109,7 @@ async def _run_alignment(
     mp3_path: Path,
     lyrics_text: str,
     job_dir: Path,
-) -> list:
+) -> AlignmentResult:
     global waiting_jobs
     line_count = len([line for line in lyrics_text.splitlines() if line.strip()])
     _job_log(
@@ -139,7 +147,7 @@ async def _run_alignment(
                 "stage=align_finished",
                 file=mp3_path.name,
                 elapsed=f"{time.monotonic() - started:.1f}s",
-                lines=len(synced),
+                lines=len(synced.lines),
             )
             return synced
     except Exception:
@@ -241,7 +249,9 @@ async def lifespan(app: FastAPI):
                 logger.exception("Error in cleanup task")
 
     cleanup_task = asyncio.create_task(cleanup_loop())
+    await start_worker()
     yield
+    await stop_worker()
     cleanup_task.cancel()
     await asyncio.gather(cleanup_task, return_exceptions=True)
 
@@ -315,7 +325,8 @@ async def sync_lyrics(
         if not lyrics_text:
             raise HTTPException(status_code=400, detail="Lyrics file is empty.")
 
-        synced = await _run_alignment(job_id, mp3_path, lyrics_text, job_dir)
+        alignment = await _run_alignment(job_id, mp3_path, lyrics_text, job_dir)
+        synced = alignment.lines
 
         base_name = Path(mp3.filename).stem
         output_mp3 = job_dir / f"{base_name}_synced.mp3"
@@ -325,12 +336,23 @@ async def sync_lyrics(
         shutil.copy2(mp3_path, output_mp3)
         write_sylt_tag(str(output_mp3), synced, embed_mode=embed_mode)
         write_lrc_file(str(output_lrc), synced)
+        response_headers = {
+            "Content-Disposition": _content_disposition_attachment(f"{base_name}_synced.zip"),
+            "X-Sync-Quality": alignment.quality,
+        }
+        if alignment.warnings:
+            response_headers["X-Sync-Warning"] = "; ".join(alignment.warnings)
         _job_log(job_id, "stage=tagging_done", file=mp3_path.name)
 
         zip_buffer = BytesIO()
         with ZipFile(zip_buffer, "w") as zf:
             zf.write(output_mp3, f"{base_name}_synced.mp3")
             zf.write(output_lrc, f"{base_name}_synced.lrc")
+            if alignment.report:
+                zf.writestr(
+                    f"{base_name}_sync_report.json",
+                    json.dumps(alignment.report, ensure_ascii=False),
+                )
         zip_buffer.seek(0)
 
         _job_log(
@@ -345,9 +367,7 @@ async def sync_lyrics(
         return StreamingResponse(
             zip_buffer,
             media_type="application/zip",
-            headers={
-                "Content-Disposition": _content_disposition_attachment(f"{base_name}_synced.zip")
-            },
+            headers=response_headers,
         )
     except HTTPException:
         raise
@@ -356,6 +376,76 @@ async def sync_lyrics(
         raise HTTPException(status_code=500, detail=f"Alignment failed: {e}")
     finally:
         _unregister_job(job_id)
+
+
+@app.post(
+    "/sync/jobs",
+    summary="Queue async lyric sync; results POST to callback_url when done",
+    status_code=202,
+)
+@limiter.limit(SYNC_RATE_LIMIT)
+async def enqueue_sync_job(
+    request: Request,
+    mp3: UploadFile = File(..., description="MP3 audio file"),
+    lyrics: UploadFile = File(..., description="Plain-text lyrics file (UTF-8)"),
+    track_id: str = Form(..., description="Client track identifier for idempotency"),
+    callback_url: str = Form(..., description="Webhook URL for completion payload"),
+    manual: bool = Form(default=False, description="Manual sync — save fallback-quality LRC"),
+):
+    if not mp3.filename.lower().endswith(".mp3"):
+        raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
+    if not (track_id or "").strip():
+        raise HTTPException(status_code=400, detail="track_id is required.")
+    if not (callback_url or "").strip():
+        raise HTTPException(status_code=400, detail="callback_url is required.")
+
+    upload_dir = WORK_DIR / f"upload-{uuid.uuid4()}"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    mp3_path = upload_dir / "input.mp3"
+    lyrics_path = upload_dir / "lyrics.txt"
+
+    try:
+        with open(mp3_path, "wb") as f:
+            shutil.copyfileobj(mp3.file, f)
+        if mp3_path.stat().st_size == 0:
+            raise HTTPException(status_code=400, detail="Uploaded MP3 file is empty.")
+
+        with open(lyrics_path, "wb") as f:
+            shutil.copyfileobj(lyrics.file, f)
+        if not lyrics_path.read_text(encoding="utf-8").strip():
+            raise HTTPException(status_code=400, detail="Lyrics file is empty.")
+
+        job = create_job(
+            track_id=track_id.strip(),
+            callback_url=callback_url.strip(),
+            manual=bool(manual),
+            mp3_path=mp3_path,
+            lyrics_path=lyrics_path,
+        )
+        payload = {
+            "job_id": job.job_id,
+            "track_id": job.track_id,
+            "status": job.status,
+            "manual": job.manual,
+        }
+        return JSONResponse(status_code=202, content=payload)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("[async] enqueue_failed track=%s", track_id)
+        raise HTTPException(status_code=500, detail=f"Failed to queue sync job: {exc}")
+    finally:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+
+
+@app.get("/sync/jobs/{job_id}", summary="Poll async lyric-sync job status")
+async def get_sync_job(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 @app.post("/sync/mp3-only", summary="Upload MP3 + lyrics, get back only the tagged MP3")
@@ -409,7 +499,8 @@ async def sync_lyrics_mp3_only(
         if not lyrics_text:
             raise HTTPException(status_code=400, detail="Lyrics file is empty.")
 
-        synced = await _run_alignment(job_id, mp3_path, lyrics_text, job_dir)
+        alignment = await _run_alignment(job_id, mp3_path, lyrics_text, job_dir)
+        synced = alignment.lines
 
         output_path = job_dir / "output.mp3"
         _job_log(job_id, "stage=tagging_start", file=mp3_path.name)
@@ -497,10 +588,12 @@ async def lyrics_from_mp3(
 
 @app.get("/queue", summary="Returns current number of waiting jobs")
 async def get_queue():
+    async_stats = queue_stats()
     return {
         "waiting_jobs": waiting_jobs,
         "total_slots": MAX_CONCURRENT_JOBS,
-        "active_jobs": MAX_CONCURRENT_JOBS - semaphore._value
+        "active_jobs": MAX_CONCURRENT_JOBS - semaphore._value,
+        "async_jobs": async_stats,
     }
 
 

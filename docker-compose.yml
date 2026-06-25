@@ -26,6 +26,8 @@ services:
       - WHISPER_CPU_THREADS=4
       - MAX_CONCURRENT_JOBS=1
       - SYNC_RATE_LIMIT=60/hour
+      - LYRIC_SYNC_CALLBACK_SECRET=${LYRIC_SYNC_CALLBACK_SECRET:-}
+      - LYRIC_SYNC_CALLBACK_RETRIES=5
     restart: unless-stopped
 
   tarpit:

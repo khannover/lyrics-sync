@@ -13,7 +13,8 @@ import logging
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from dtw import dtw
@@ -30,6 +31,14 @@ def _job_log(job_id: Optional[str], event: str, **fields) -> None:
     for key, value in fields.items():
         parts.append(f"{key}={value}")
     logger.info(" ".join(parts))
+
+
+@dataclass
+class AlignmentResult:
+    lines: List[Tuple[str, int]]
+    quality: str = "good"
+    warnings: List[str] = field(default_factory=list)
+    report: Optional[Dict[str, Any]] = None
 
 
 MODEL_SIZE = os.environ.get("MODEL_SIZE", "base")
@@ -588,11 +597,13 @@ def align_lyrics_to_audio(
     lyrics_text: str,
     job_dir: str,
     job_id: Optional[str] = None,
-) -> List[Tuple[str, int]]:
+) -> AlignmentResult:
     """
     Main entry point for alignment.
-    Returns: [(line_text, start_time_ms), ...]
+    Returns aligned lines plus sync quality metadata.
     """
+    quality = "good"
+    warnings: List[str] = []
     job_started = time.monotonic()
     mp3_name = Path(mp3_path).name
     _job_log(
@@ -646,6 +657,8 @@ def align_lyrics_to_audio(
             len(non_marker_ts),
         )
         _job_log(job_id, "stage=progressive_fallback")
+        quality = "degraded"
+        warnings.append("Progressive alignment fallback used after low DTW diversity.")
         synced = _align_lines_progressive(lyrics_lines, whisper_words)
 
     # Final guardrail: if timestamps still cover only a tiny early segment,
@@ -677,7 +690,13 @@ def align_lyrics_to_audio(
             duration_ms=duration_ms,
             unique_ratio=f"{final_unique_ratio:.2f}",
         )
+        quality = "fallback"
+        warnings.append("Approximate spread timing applied after low timestamp coverage.")
         synced = _spread_timestamps_by_lyrics(lyrics_lines, duration_ms)
+
+    if not whisper_words:
+        quality = "fallback"
+        warnings.append("No words detected in audio transcription.")
 
     elapsed = time.monotonic() - job_started
     _job_log(
@@ -692,4 +711,16 @@ def align_lyrics_to_audio(
     if len(synced) > 3:
         logger.info("[sync] job=%s preview ... and %d more lines", job_id or "-", len(synced) - 3)
 
-    return synced
+    report = {
+        "quality": quality,
+        "warnings": warnings,
+        "line_count": len(synced),
+        "duration_ms": duration_ms if "duration_ms" in locals() else 0,
+        "whisper_word_count": len(whisper_words),
+    }
+    return AlignmentResult(
+        lines=synced,
+        quality=quality,
+        warnings=warnings,
+        report=report,
+    )

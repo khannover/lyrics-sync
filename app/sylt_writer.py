@@ -32,6 +32,11 @@ def _build_lrc(synced_lyrics: List[Tuple[str, int]]) -> str:
     return "\n".join(lines)
 
 
+def format_lrc(synced_lyrics: List[Tuple[str, int]]) -> str:
+    """Public helper for building LRC text without writing tags/files."""
+    return _build_lrc(synced_lyrics)
+
+
 def write_sylt_tag(
     mp3_path: str,
     synced_lyrics: List[Tuple[str, int]],
