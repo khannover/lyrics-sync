@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from mutagen.mp3 import MP3, HeaderNotFoundError
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi.util import get_remote_address  # kept for potential future use / tests
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
@@ -41,11 +41,26 @@ CLEANUP_INTERVAL_SECONDS = 600
 MAX_TEMP_AGE_SECONDS = 3600
 
 def _get_client_ip(request: Request) -> str:
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",", 1)[0].strip()
+    """Return the original client IP.
 
-    return get_remote_address(request)
+    Trusts X-Forwarded-For / X-Real-IP set by nginx. Falls back to the
+    direct peer only when running without a proxy (dev, tests).
+    """
+    # X-Forwarded-For: "client, proxy1, ..."
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+
+    # Single-value header commonly set by nginx
+    xri = request.headers.get("x-real-ip")
+    if xri:
+        return xri.strip()
+
+    # Direct TCP peer (no proxy in front)
+    if request.client and request.client.host:
+        return request.client.host
+
+    return "unknown"
 
 
 limiter = Limiter(key_func=_get_client_ip)
@@ -55,6 +70,10 @@ waiting_jobs = 0
 active_job_ids: set[str] = set()
 SYNC_RATE_LIMIT = os.environ.get("SYNC_RATE_LIMIT", "60/hour")
 SYNC_MP3_ONLY_RATE_LIMIT = os.environ.get("SYNC_MP3_ONLY_RATE_LIMIT", SYNC_RATE_LIMIT)
+# Async job enqueue is the path used by Kai's library sync client. It is
+# intentionally cheap (just queues work) and has track_id idempotency.
+# Give it a generous limit so large music libraries can be submitted.
+SYNC_JOBS_RATE_LIMIT = os.environ.get("SYNC_JOBS_RATE_LIMIT", "1000/hour")
 
 
 def _configure_logging() -> None:
@@ -383,7 +402,7 @@ async def sync_lyrics(
     summary="Queue async lyric sync; results POST to callback_url when done",
     status_code=202,
 )
-@limiter.limit(SYNC_RATE_LIMIT)
+@limiter.limit(SYNC_JOBS_RATE_LIMIT)
 async def enqueue_sync_job(
     request: Request,
     mp3: UploadFile = File(..., description="MP3 audio file"),
