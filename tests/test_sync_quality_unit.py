@@ -34,6 +34,23 @@ def test_evaluate_sync_report_good():
     assert v.quality == "good"
 
 
+def test_evaluate_sync_report_accepts_degraded():
+    report = {
+        "quality": "degraded",
+        "warnings": ["sparse alignment in bridge"],
+        "line_count": 4,
+        "duration_ms": 120_000,
+        "whisper_word_count": 40,
+    }
+    lrc = "\n".join(
+        f"[00:{30 + i * 15:02d}.00]line {i}" for i in range(4)
+    )
+    v = evaluate_sync_report(report, lrc_text=lrc)
+    assert v.ok
+    assert v.quality == "degraded"
+    assert v.warnings == ["sparse alignment in bridge"]
+
+
 def test_evaluate_sync_report_rejects_fallback():
     report = {
         "quality": "fallback",

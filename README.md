@@ -58,7 +58,7 @@ Upload an MP3 and a lyrics file to get a ZIP containing the synced MP3 and an LR
 
 **Example Curl:**
 ```bash
-curl -X POST "http://localhost:8000/sync" \
+curl -X POST "http://localhost:8005/sync" \
   -F "mp3=@path/to/song.mp3" \
   -F "lyrics=@path/to/lyrics.txt" \
   --output synced_lyrics.zip
@@ -66,7 +66,7 @@ curl -X POST "http://localhost:8000/sync" \
 
 Use `embed_mode=sylt_only` to keep existing plain lyrics intact:
 ```bash
-curl -X POST "http://localhost:8000/sync" \
+curl -X POST "http://localhost:8005/sync" \
   -F "mp3=@path/to/song.mp3" \
   -F "lyrics=@path/to/lyrics.txt" \
   -F "embed_mode=sylt_only" \
@@ -83,7 +83,7 @@ Upload an MP3 and a lyrics file to get back a single MP3 file with embedded SYLT
 
 **Example Curl:**
 ```bash
-curl -X POST "http://localhost:8000/sync/mp3-only" \
+curl -X POST "http://localhost:8005/sync/mp3-only" \
   -F "mp3=@path/to/song.mp3" \
   -F "lyrics=@path/to/lyrics.txt" \
   --output song_synced.mp3
@@ -91,7 +91,7 @@ curl -X POST "http://localhost:8000/sync/mp3-only" \
 
 Use `embed_mode=sylt_only` to keep existing plain lyrics intact:
 ```bash
-curl -X POST "http://localhost:8000/sync/mp3-only" \
+curl -X POST "http://localhost:8005/sync/mp3-only" \
   -F "mp3=@path/to/song.mp3" \
   -F "lyrics=@path/to/lyrics.txt" \
   -F "embed_mode=sylt_only" \
@@ -109,7 +109,7 @@ Returns JSON with:
 
 **Example Curl:**
 ```bash
-curl -X POST "http://localhost:8000/lyrics/from-mp3" \
+curl -X POST "http://localhost:8005/lyrics/from-mp3" \
   -F "mp3=@path/to/song.mp3"
 ```
 
@@ -136,6 +136,6 @@ Uses a Bancamp dev track (MP3 + DB lyrics) by default when `LIVE_SYNC_TRACK_ID` 
 Queue alignment in the background and receive a JSON webhook at `callback_url` when done. Optional header `X-Lyrics-Sync-Token` if `LYRIC_SYNC_CALLBACK_SECRET` is set. Poll status with `GET /sync/jobs/{job_id}`.
 
 ## Web UI
-A simple web interface is available at the root URL: `http://localhost:8000/`.
+A simple web interface is available at the root URL: `http://localhost:8005/`.
 
 When you select an MP3 file in the Auto-Sync tab, the UI automatically calls `POST /lyrics/from-mp3` to detect any embedded lyrics. If found, the **Timed Lyrics (LRC)** are shown in a read-only collapsible panel, and the **plain lyrics** (timestamps stripped) are pre-populated in the lyrics textarea so you can review or edit them before clicking Sync.
