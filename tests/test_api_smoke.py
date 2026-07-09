@@ -281,3 +281,17 @@ def test_enqueue_sync_job_rejects_empty_lyrics():
         )
     assert response.status_code == 400
     assert response.json()["detail"] == "Lyrics file is empty."
+
+
+def test_enqueue_sync_job_rejects_empty_mp3():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/jobs",
+            data=_async_job_form(),
+            files={
+                "mp3": ("track.mp3", b"", "audio/mpeg"),
+                "lyrics": ("lyrics.txt", b"line one", "text/plain"),
+            },
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Uploaded MP3 file is empty."
