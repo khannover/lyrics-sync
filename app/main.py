@@ -212,6 +212,45 @@ def _ensure_taggable_mp3(input_path: Path, job_dir: Path) -> Path:
 
     return normalized_path
 
+
+def _cleanup_stale_work_items(
+    work_dir: Path,
+    *,
+    now: float,
+    max_age_seconds: float,
+    protected_names: set[str],
+) -> list[str]:
+    """Delete stale temp files and job folders under *work_dir*.
+
+    Returns the basenames that were removed (dirs and files).
+    """
+    removed: list[str] = []
+    if not work_dir.exists():
+        return removed
+
+    for item in work_dir.iterdir():
+        try:
+            mtime = item.stat().st_mtime
+        except FileNotFoundError:
+            continue
+
+        if (now - mtime) <= max_age_seconds:
+            continue
+
+        if item.name in protected_names:
+            continue
+
+        if item.is_dir():
+            logger.info("Cleaning up old job folder: %s", item.name)
+            shutil.rmtree(item, ignore_errors=True)
+        else:
+            logger.info("Cleaning up old temp file: %s", item.name)
+            item.unlink(missing_ok=True)
+        removed.append(item.name)
+
+    return removed
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _configure_logging()
@@ -223,26 +262,12 @@ async def lifespan(app: FastAPI):
         while True:
             try:
                 await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
-                now = time.time()
-                for item in WORK_DIR.iterdir():
-                    try:
-                        mtime = item.stat().st_mtime
-                    except FileNotFoundError:
-                        # Item may disappear while iterating.
-                        continue
-
-                    if (now - mtime) <= MAX_TEMP_AGE_SECONDS:
-                        continue
-
-                    if item.name in active_job_ids:
-                        continue
-
-                    if item.is_dir():
-                        logger.info("Cleaning up old job folder: %s", item.name)
-                        shutil.rmtree(item, ignore_errors=True)
-                    else:
-                        logger.info("Cleaning up old temp file: %s", item.name)
-                        item.unlink(missing_ok=True)
+                _cleanup_stale_work_items(
+                    WORK_DIR,
+                    now=time.time(),
+                    max_age_seconds=MAX_TEMP_AGE_SECONDS,
+                    protected_names=active_job_ids,
+                )
             except asyncio.CancelledError:
                 break
             except Exception:
