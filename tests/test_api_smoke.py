@@ -299,6 +299,17 @@ def test_enqueue_sync_job_rejects_javascript_callback_url():
     assert response.json()["detail"] == "callback_url must be a valid http or https URL."
 
 
+def test_enqueue_sync_job_rejects_file_scheme_callback_url():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/jobs",
+            data=_async_job_form(callback_url="file:///etc/passwd"),
+            files=_async_job_files(),
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "callback_url must be a valid http or https URL."
+
+
 def test_enqueue_sync_job_rejects_empty_lyrics():
     from tests.test_sylt_writer import _SILENT_MP3_BYTES
 
