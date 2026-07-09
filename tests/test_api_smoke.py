@@ -382,6 +382,31 @@ def test_enqueue_sync_job_accepts_https_returns_202(stub_async_run_job):
     assert body["job_id"]
 
 
+def test_get_sync_job_after_enqueue_returns_snapshot(stub_async_run_job):
+    from tests.test_sylt_writer import _SILENT_MP3_BYTES
+
+    track_id = f"poll-{uuid.uuid4()}"
+    with TestClient(app) as client:
+        post_resp = client.post(
+            "/sync/jobs",
+            data=_async_job_form(track_id=track_id),
+            files=_async_job_files(_SILENT_MP3_BYTES),
+        )
+        assert post_resp.status_code == 202
+        job_id = post_resp.json()["job_id"]
+
+        get_resp = client.get(f"/sync/jobs/{job_id}")
+
+    assert get_resp.status_code == 200
+    snap = get_resp.json()
+    assert snap["job_id"] == job_id
+    assert snap["track_id"] == track_id
+    assert snap["manual"] is False
+    assert snap["status"] in {"queued", "processing", "completed"}
+    assert "has_lyrics_lrc" in snap
+    assert "created_at" in snap
+
+
 def test_normalize_callback_url_strips_whitespace():
     from app.main import _normalize_callback_url
 
