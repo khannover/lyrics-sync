@@ -27,6 +27,16 @@ Docker Compose now starts three services:
 
 This setup stays HTTP-only. It does not require a domain name, TLS certificates, or any HTTPS configuration.
 
+### Environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SYNC_RATE_LIMIT` | `60/hour` | Rate limit for `POST /sync` and `POST /sync/jobs` (slowapi; excess → HTTP 429) |
+| `SYNC_MP3_ONLY_RATE_LIMIT` | same as `SYNC_RATE_LIMIT` | Rate limit for `POST /sync/mp3-only` |
+| `MAX_CONCURRENT_JOBS` | `1` | Concurrent Whisper alignment jobs (`GET /queue` → `total_slots`) |
+| `LOG_LEVEL` | `INFO` | Application log verbosity |
+| `LYRIC_SYNC_CALLBACK_SECRET` | *(unset)* | If set, async job webhooks must send matching `X-Lyrics-Sync-Token` |
+
 ## Bot Mitigation
 
 Nginx sits in front of the app and diverts obvious scan traffic to a tarpit service before those requests reach FastAPI. The tarpit intentionally responds slowly so common probes spend time outside the main application.
@@ -118,7 +128,12 @@ curl -X POST "http://localhost:8005/lyrics/from-mp3" \
 ```
 
 ### 4. `GET /queue`
-Returns the status of the job queue.
+Returns alignment semaphore and async job counts:
+
+- `waiting_jobs`: requests blocked on the Whisper semaphore
+- `total_slots`: `MAX_CONCURRENT_JOBS`
+- `active_jobs`: alignments currently running
+- `async_jobs`: `{ "queued", "processing", "completed", "failed" }` counts for `POST /sync/jobs`
 
 ### 5. `GET /health`
 Returns health status and disk usage statistics.

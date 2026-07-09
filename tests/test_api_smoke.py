@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.async_jobs as async_jobs
-from app.main import app
+from app.main import app, limiter
 
 
 def test_health_returns_disk_stats():
@@ -41,6 +41,25 @@ def test_queue_returns_semaphore_and_async_stats():
     assert body["active_jobs"] == 0
     async_jobs = body["async_jobs"]
     assert set(async_jobs.keys()) == {"queued", "processing", "completed", "failed"}
+
+
+def test_sync_returns_429_when_hourly_rate_limit_exceeded():
+    """slowapi counts rejected validation requests; 61st POST /sync should 429."""
+    limiter.reset()
+    payload = {
+        "mp3": ("track.flac", b"fake-audio", "audio/flac"),
+        "lyrics": ("lyrics.txt", b"hello", "text/plain"),
+    }
+    try:
+        with TestClient(app) as client:
+            for _ in range(60):
+                response = client.post("/sync", files=payload)
+                assert response.status_code == 400
+            response = client.post("/sync", files=payload)
+        assert response.status_code == 429
+        assert "rate" in response.text.lower() or response.json().get("error")
+    finally:
+        limiter.reset()
 
 
 def test_get_sync_job_unknown_returns_404():
