@@ -195,10 +195,14 @@ def _content_disposition_attachment(filename: str) -> str:
     return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
 
 
+def _mp3_upload_stem(original_filename: str) -> str:
+    """Stem from upload filename (Path treats .mp3/.MP3 suffix case-sensitively on Linux)."""
+    return Path(original_filename or "track.mp3").stem or "track"
+
+
 def _synced_mp3_download_name(original_filename: str) -> str:
     """Derive download filename from upload name (case-insensitive .mp3 suffix)."""
-    stem = Path(original_filename or "track.mp3").stem or "track"
-    return f"{stem}_synced.mp3"
+    return f"{_mp3_upload_stem(original_filename)}_synced.mp3"
 
 
 def _ensure_taggable_mp3(input_path: Path, job_dir: Path) -> Path:
@@ -382,7 +386,7 @@ async def sync_lyrics(
         alignment = await _run_alignment(job_id, mp3_path, lyrics_text, job_dir)
         synced = alignment.lines
 
-        base_name = Path(mp3.filename).stem
+        base_name = _mp3_upload_stem(mp3.filename or "track.mp3")
         output_mp3 = job_dir / f"{base_name}_synced.mp3"
         output_lrc = job_dir / f"{base_name}_synced.lrc"
 
@@ -571,13 +575,17 @@ async def sync_lyrics_mp3_only(
         )
 
         download_name = _synced_mp3_download_name(mp3.filename or "track.mp3")
+        response_headers = {
+            "Content-Disposition": _content_disposition_attachment(download_name),
+            "X-Sync-Quality": alignment.quality,
+        }
+        if alignment.warnings:
+            response_headers["X-Sync-Warning"] = "; ".join(alignment.warnings)
         return FileResponse(
             path=str(output_path),
             media_type="audio/mpeg",
             filename=re.sub(r"[^\x20-\x7E]", "_", download_name),
-            headers={
-                "Content-Disposition": _content_disposition_attachment(download_name)
-            },
+            headers=response_headers,
         )
     except HTTPException:
         raise

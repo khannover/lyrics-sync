@@ -81,6 +81,8 @@ Upload an MP3 and a lyrics file to get back a single MP3 file with embedded SYLT
 - `lyrics` (file): Plain-text lyrics file (UTF-8)
 - `embed_mode` (string, optional, default `"overwrite"`): Embedding mode (same options as `/sync`).
 
+**Response headers:** `X-Sync-Quality` and optional `X-Sync-Warning` (same semantics as `POST /sync`).
+
 **Example Curl:**
 ```bash
 curl -X POST "http://localhost:8005/sync/mp3-only" \

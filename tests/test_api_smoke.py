@@ -183,10 +183,43 @@ def test_get_client_ip_falls_back_to_remote_address(monkeypatch):
 
 
 def test_synced_mp3_download_name_case_insensitive():
-    from app.main import _synced_mp3_download_name
+    from app.main import _mp3_upload_stem, _synced_mp3_download_name
 
     assert _synced_mp3_download_name("My Song.MP3") == "My Song_synced.mp3"
     assert _synced_mp3_download_name("track.mp3") == "track_synced.mp3"
+    assert _mp3_upload_stem("") == "track"
+    assert _mp3_upload_stem("weird.MP3") == "weird"
+
+
+def test_sync_mp3_only_returns_sync_quality_headers(monkeypatch):
+    from tests.test_sylt_writer import _SILENT_MP3_BYTES
+
+    import app.main as main
+    from app.alignment import AlignmentResult
+
+    async def _fake_alignment(job_id, mp3_path, lyrics_text, job_dir):
+        return AlignmentResult(
+            lines=[("hello", 0)],
+            quality="degraded",
+            warnings=["sparse bridge"],
+            report={"quality": "degraded", "line_count": 1},
+        )
+
+    monkeypatch.setattr(main, "_run_alignment", _fake_alignment)
+    monkeypatch.setattr(main, "write_sylt_tag", lambda *args, **kwargs: None)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/mp3-only",
+            files={
+                "mp3": ("track.mp3", _SILENT_MP3_BYTES, "audio/mpeg"),
+                "lyrics": ("lyrics.txt", b"hello world", "text/plain"),
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers.get("X-Sync-Quality") == "degraded"
+    assert response.headers.get("X-Sync-Warning") == "sparse bridge"
 
 
 def test_content_disposition_attachment_ascii_and_utf8():
