@@ -17,6 +17,16 @@ def test_health_returns_disk_stats():
         assert isinstance(disk[key], (int, float))
 
 
+def test_health_disk_gb_rounded_to_two_decimals():
+    with TestClient(app) as client:
+        response = client.get("/health")
+    assert response.status_code == 200
+    disk = response.json()["disk"]
+    for key in ("total_gb", "used_gb", "free_gb"):
+        value = disk[key]
+        assert round(value, 2) == value, f"{key}={value!r} not rounded to 2 decimals"
+
+
 def test_queue_returns_semaphore_and_async_stats():
     with TestClient(app) as client:
         response = client.get("/queue")
