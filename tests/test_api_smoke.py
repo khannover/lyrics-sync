@@ -24,7 +24,7 @@ def test_queue_returns_semaphore_and_async_stats():
     body = response.json()
     assert body["waiting_jobs"] == 0
     assert body["total_slots"] >= 1
-    assert "active_jobs" in body
+    assert body["active_jobs"] == 0
     async_jobs = body["async_jobs"]
     assert set(async_jobs.keys()) == {"queued", "processing", "completed", "failed"}
 
@@ -210,3 +210,19 @@ def test_enqueue_sync_job_rejects_blank_callback_url():
         )
     assert response.status_code == 400
     assert response.json()["detail"] == "callback_url is required."
+
+
+def test_enqueue_sync_job_rejects_empty_lyrics():
+    from tests.test_sylt_writer import _SILENT_MP3_BYTES
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/jobs",
+            data=_async_job_form(),
+            files={
+                "mp3": ("track.mp3", _SILENT_MP3_BYTES, "audio/mpeg"),
+                "lyrics": ("lyrics.txt", b"  \n", "text/plain"),
+            },
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Lyrics file is empty."

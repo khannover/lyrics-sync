@@ -52,6 +52,7 @@ limiter = Limiter(key_func=_get_client_ip)
 MAX_CONCURRENT_JOBS = max(1, int(os.environ.get("MAX_CONCURRENT_JOBS", "1")))
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
 waiting_jobs = 0
+alignment_active = 0
 active_job_ids: set[str] = set()
 SYNC_RATE_LIMIT = os.environ.get("SYNC_RATE_LIMIT", "60/hour")
 SYNC_MP3_ONLY_RATE_LIMIT = os.environ.get("SYNC_MP3_ONLY_RATE_LIMIT", SYNC_RATE_LIMIT)
@@ -110,7 +111,7 @@ async def _run_alignment(
     lyrics_text: str,
     job_dir: Path,
 ) -> AlignmentResult:
-    global waiting_jobs
+    global waiting_jobs, alignment_active
     line_count = len([line for line in lyrics_text.splitlines() if line.strip()])
     _job_log(
         job_id,
@@ -123,40 +124,49 @@ async def _run_alignment(
 
     waiting_jobs += 1
     started = time.monotonic()
+    acquired_slot = False
     try:
         async with semaphore:
             waiting_jobs -= 1
-            _touch_job_dir(job_dir)
-            _assert_audio_ready(job_id, mp3_path, job_dir)
-            mp3_bytes = mp3_path.stat().st_size
+            acquired_slot = True
+            alignment_active += 1
+            try:
+                _touch_job_dir(job_dir)
+                _assert_audio_ready(job_id, mp3_path, job_dir)
+                mp3_bytes = mp3_path.stat().st_size
+                _job_log(
+                    job_id,
+                    "stage=align_start",
+                    file=mp3_path.name,
+                    mp3_bytes=mp3_bytes,
+                )
+                synced = await asyncio.to_thread(
+                    align_lyrics_to_audio,
+                    str(mp3_path),
+                    lyrics_text,
+                    job_dir=str(job_dir),
+                    job_id=job_id,
+                )
+                _job_log(
+                    job_id,
+                    "stage=align_finished",
+                    file=mp3_path.name,
+                    elapsed=f"{time.monotonic() - started:.1f}s",
+                    lines=len(synced.lines),
+                )
+                return synced
+            finally:
+                alignment_active -= 1
+    except BaseException as exc:
+        if not acquired_slot:
+            waiting_jobs = max(0, waiting_jobs - 1)
+        if isinstance(exc, Exception):
             _job_log(
                 job_id,
-                "stage=align_start",
-                file=mp3_path.name,
-                mp3_bytes=mp3_bytes,
-            )
-            synced = await asyncio.to_thread(
-                align_lyrics_to_audio,
-                str(mp3_path),
-                lyrics_text,
-                job_dir=str(job_dir),
-                job_id=job_id,
-            )
-            _job_log(
-                job_id,
-                "stage=align_finished",
+                "stage=align_failed",
                 file=mp3_path.name,
                 elapsed=f"{time.monotonic() - started:.1f}s",
-                lines=len(synced.lines),
             )
-            return synced
-    except Exception:
-        _job_log(
-            job_id,
-            "stage=align_failed",
-            file=mp3_path.name,
-            elapsed=f"{time.monotonic() - started:.1f}s",
-        )
         raise
 
 
@@ -620,7 +630,7 @@ async def get_queue():
     return {
         "waiting_jobs": waiting_jobs,
         "total_slots": MAX_CONCURRENT_JOBS,
-        "active_jobs": MAX_CONCURRENT_JOBS - semaphore._value,
+        "active_jobs": alignment_active,
         "async_jobs": async_stats,
     }
 
