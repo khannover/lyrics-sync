@@ -295,12 +295,18 @@ async def lifespan(app: FastAPI):
         while True:
             try:
                 await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
-                _cleanup_stale_work_items(
+                removed = _cleanup_stale_work_items(
                     WORK_DIR,
                     now=time.time(),
                     max_age_seconds=MAX_TEMP_AGE_SECONDS,
                     protected_names=active_job_ids,
                 )
+                if removed:
+                    logger.info(
+                        "Cleanup removed %d stale item(s): %s",
+                        len(removed),
+                        ", ".join(removed),
+                    )
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -669,6 +675,12 @@ async def health():
         "status": "ok",
         "version": app.version,
         "max_concurrent_jobs": MAX_CONCURRENT_JOBS,
+        "alignment": {
+            "waiting_jobs": waiting_jobs,
+            "active_jobs": alignment_active,
+            "total_slots": MAX_CONCURRENT_JOBS,
+        },
+        "async_jobs": queue_stats(),
         "disk": {
             "total_gb": round(usage.total / (2**30), 2),
             "used_gb": round(usage.used / (2**30), 2),

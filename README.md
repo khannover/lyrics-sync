@@ -136,7 +136,7 @@ Returns alignment semaphore and async job counts:
 - `async_jobs`: `{ "queued", "processing", "completed", "failed" }` counts for `POST /sync/jobs`
 
 ### 5. `GET /health`
-Returns health status, service `version`, `max_concurrent_jobs` (from `MAX_CONCURRENT_JOBS`), and disk usage statistics for the work directory.
+Returns health status, service `version`, `max_concurrent_jobs` (from `MAX_CONCURRENT_JOBS`), Whisper semaphore snapshot (`alignment`: `waiting_jobs`, `active_jobs`, `total_slots`), async job counts (`async_jobs`), and disk usage statistics for the work directory.
 
 ## Live quality check (real MP3)
 

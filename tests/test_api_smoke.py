@@ -18,6 +18,12 @@ def test_health_returns_disk_stats():
     assert body["status"] == "ok"
     assert body["version"] == app.version
     assert body["max_concurrent_jobs"] == main.MAX_CONCURRENT_JOBS
+    alignment = body["alignment"]
+    assert alignment["waiting_jobs"] == 0
+    assert alignment["active_jobs"] == 0
+    assert alignment["total_slots"] == main.MAX_CONCURRENT_JOBS
+    async_jobs = body["async_jobs"]
+    assert set(async_jobs.keys()) == {"queued", "processing", "completed", "failed"}
     disk = body["disk"]
     for key in ("total_gb", "used_gb", "free_gb"):
         assert key in disk
