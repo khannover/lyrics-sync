@@ -310,6 +310,37 @@ def test_enqueue_sync_job_rejects_file_scheme_callback_url():
     assert response.json()["detail"] == "callback_url must be a valid http or https URL."
 
 
+def test_enqueue_sync_job_rejects_protocol_relative_callback_url():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/jobs",
+            data=_async_job_form(callback_url="//evil.example/hook"),
+            files=_async_job_files(),
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "callback_url must be a valid http or https URL."
+
+
+def test_enqueue_sync_job_rejects_data_scheme_callback_url():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/jobs",
+            data=_async_job_form(callback_url="data:text/html,<script>alert(1)</script>"),
+            files=_async_job_files(),
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "callback_url must be a valid http or https URL."
+
+
+def test_normalize_callback_url_strips_whitespace():
+    from app.main import _normalize_callback_url
+
+    assert (
+        _normalize_callback_url("  https://example.com/lyrics-sync-hook  ")
+        == "https://example.com/lyrics-sync-hook"
+    )
+
+
 def test_enqueue_sync_job_rejects_empty_lyrics():
     from tests.test_sylt_writer import _SILENT_MP3_BYTES
 
