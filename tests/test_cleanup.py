@@ -58,3 +58,15 @@ def test_cleanup_skips_recent_and_protected_items(tmp_path):
     assert recent.exists()
     assert active.exists()
     assert not stale_file.exists()
+
+
+def test_cleanup_noop_when_work_dir_missing(tmp_path):
+    missing = tmp_path / "does-not-exist"
+    assert not missing.exists()
+    removed = _cleanup_stale_work_items(
+        missing,
+        now=time.time(),
+        max_age_seconds=3600,
+        protected_names=set(),
+    )
+    assert removed == []

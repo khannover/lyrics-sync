@@ -667,9 +667,11 @@ async def health():
     usage = shutil.disk_usage(WORK_DIR)
     return {
         "status": "ok",
+        "version": app.version,
+        "max_concurrent_jobs": MAX_CONCURRENT_JOBS,
         "disk": {
             "total_gb": round(usage.total / (2**30), 2),
             "used_gb": round(usage.used / (2**30), 2),
             "free_gb": round(usage.free / (2**30), 2),
-        }
+        },
     }

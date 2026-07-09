@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.async_jobs as async_jobs
+import app.main as main
 from app.main import app, limiter
 
 
@@ -15,6 +16,8 @@ def test_health_returns_disk_stats():
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
+    assert body["version"] == app.version
+    assert body["max_concurrent_jobs"] == main.MAX_CONCURRENT_JOBS
     disk = body["disk"]
     for key in ("total_gb", "used_gb", "free_gb"):
         assert key in disk
