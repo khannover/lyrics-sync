@@ -182,6 +182,13 @@ def test_get_client_ip_falls_back_to_remote_address(monkeypatch):
     assert main._get_client_ip(request) == "198.51.100.42"
 
 
+def test_synced_mp3_download_name_case_insensitive():
+    from app.main import _synced_mp3_download_name
+
+    assert _synced_mp3_download_name("My Song.MP3") == "My Song_synced.mp3"
+    assert _synced_mp3_download_name("track.mp3") == "track_synced.mp3"
+
+
 def test_content_disposition_attachment_ascii_and_utf8():
     from app.main import _content_disposition_attachment
 

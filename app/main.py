@@ -195,6 +195,12 @@ def _content_disposition_attachment(filename: str) -> str:
     return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
 
 
+def _synced_mp3_download_name(original_filename: str) -> str:
+    """Derive download filename from upload name (case-insensitive .mp3 suffix)."""
+    stem = Path(original_filename or "track.mp3").stem or "track"
+    return f"{stem}_synced.mp3"
+
+
 def _ensure_taggable_mp3(input_path: Path, job_dir: Path) -> Path:
     """
     Return a valid MP3 path that mutagen can tag.
@@ -564,12 +570,13 @@ async def sync_lyrics_mp3_only(
             mp3_bytes=output_path.stat().st_size,
         )
 
+        download_name = _synced_mp3_download_name(mp3.filename or "track.mp3")
         return FileResponse(
             path=str(output_path),
             media_type="audio/mpeg",
-            filename=re.sub(r"[^\x20-\x7E]", "_", mp3.filename.replace(".mp3", "_synced.mp3")),
+            filename=re.sub(r"[^\x20-\x7E]", "_", download_name),
             headers={
-                "Content-Disposition": _content_disposition_attachment(mp3.filename.replace(".mp3", "_synced.mp3"))
+                "Content-Disposition": _content_disposition_attachment(download_name)
             },
         )
     except HTTPException:
