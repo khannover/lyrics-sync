@@ -56,6 +56,8 @@ Upload an MP3 and a lyrics file to get a ZIP containing the synced MP3 and an LR
   - `"overwrite"`: Removes existing SYLT, USLT, and TXXX:LYRICS frames, then writes all of them with LRC-timestamped text.
   - `"sylt_only"`: Removes only existing SYLT frames and writes only the SYLT frame — existing plain (unsynced) USLT/TXXX:LYRICS lyrics are preserved.
 
+**Response headers:** `X-Sync-Quality` and optional `X-Sync-Warning`. The ZIP includes `*_synced.mp3`, `*_synced.lrc`, and `*_sync_report.json`.
+
 **Example Curl:**
 ```bash
 curl -X POST "http://localhost:8005/sync" \
