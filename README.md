@@ -15,7 +15,7 @@ A FastAPI-based service that synchronizes plain-text lyrics to MP3 audio files u
 The easiest way to run the service is using Docker Compose:
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
 The service will be available at `http://localhost:8005`.
