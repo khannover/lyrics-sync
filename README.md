@@ -119,6 +119,9 @@ Returns the status of the job queue.
 ### 5. `GET /health`
 Returns health status and disk usage statistics.
 
+### Async sync (`POST /sync/jobs`, `GET /sync/jobs/{job_id}`)
+Queue alignment in the background and receive a JSON webhook at `callback_url` when done. Optional header `X-Lyrics-Sync-Token` if `LYRIC_SYNC_CALLBACK_SECRET` is set. Poll status with `GET /sync/jobs/{job_id}`.
+
 ## Web UI
 A simple web interface is available at the root URL: `http://localhost:8000/`.
 
