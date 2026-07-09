@@ -63,6 +63,61 @@ def test_sync_rejects_invalid_embed_mode():
     assert "embed_mode" in response.json()["detail"]
 
 
+def test_sync_mp3_only_rejects_non_mp3_extension():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/mp3-only",
+            files={
+                "mp3": ("track.wav", b"fake-audio", "audio/wav"),
+                "lyrics": ("lyrics.txt", b"line one", "text/plain"),
+            },
+        )
+    assert response.status_code == 400
+    assert ".mp3" in response.json()["detail"]
+
+
+def test_sync_mp3_only_rejects_invalid_embed_mode():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/mp3-only",
+            files={
+                "mp3": ("track.mp3", b"fake-audio", "audio/mpeg"),
+                "lyrics": ("lyrics.txt", b"line one", "text/plain"),
+            },
+            data={"embed_mode": "banana"},
+        )
+    assert response.status_code == 400
+    assert "embed_mode" in response.json()["detail"]
+
+
+def test_sync_mp3_only_rejects_empty_mp3():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/mp3-only",
+            files={
+                "mp3": ("track.mp3", b"", "audio/mpeg"),
+                "lyrics": ("lyrics.txt", b"line one", "text/plain"),
+            },
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Uploaded MP3 file is empty."
+
+
+def test_sync_mp3_only_rejects_empty_lyrics():
+    from tests.test_sylt_writer import _SILENT_MP3_BYTES
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/mp3-only",
+            files={
+                "mp3": ("track.mp3", _SILENT_MP3_BYTES, "audio/mpeg"),
+                "lyrics": ("lyrics.txt", b"  \n\t", "text/plain"),
+            },
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Lyrics file is empty."
+
+
 def test_sync_rejects_empty_mp3():
     with TestClient(app) as client:
         response = client.post(
