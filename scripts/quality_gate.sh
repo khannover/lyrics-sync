@@ -10,8 +10,8 @@ BASE_URL="${LYRICS_SYNC_BASE_URL:-http://127.0.0.1:8005}"
 echo "health: $BASE_URL/health"
 curl -sf "$BASE_URL/health" >/dev/null
 
-echo "pytest: tests/test_sync_quality_unit.py tests/test_api_smoke.py"
-pytest tests/test_sync_quality_unit.py tests/test_api_smoke.py -q
+echo "pytest: tests/test_sync_quality_unit.py tests/test_api_smoke.py tests/test_cleanup.py"
+pytest tests/test_sync_quality_unit.py tests/test_api_smoke.py tests/test_cleanup.py -q
 
 if [[ "${SKIP_LIVE_SYNC:-}" == "1" ]]; then
   echo "live sync: skipped (SKIP_LIVE_SYNC=1)"

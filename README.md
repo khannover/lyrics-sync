@@ -147,7 +147,7 @@ cd /mnt/c/projects/lyrics-sync
 ./scripts/quality_gate.sh
 ```
 
-The gate runs `curl /health`, fast pytest (`test_sync_quality_unit` + `test_api_smoke`), then the live MP3 check. Set `SKIP_LIVE_SYNC=1` to skip Whisper. Do **not** pipe `live_sync_quality_check.py` through `tee` — that breaks exit-code checks.
+The gate runs `curl /health`, fast pytest (`test_sync_quality_unit` + `test_api_smoke` + `test_cleanup`), then the live MP3 check. Set `SKIP_LIVE_SYNC=1` to skip Whisper. Do **not** pipe `live_sync_quality_check.py` through `tee` — that breaks exit-code checks.
 
 Extended local pytest (cleanup + async jobs):
 
