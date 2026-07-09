@@ -63,6 +63,56 @@ def test_sync_rejects_invalid_embed_mode():
     assert "embed_mode" in response.json()["detail"]
 
 
+def test_sync_rejects_empty_mp3():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync",
+            files={
+                "mp3": ("track.mp3", b"", "audio/mpeg"),
+                "lyrics": ("lyrics.txt", b"line one", "text/plain"),
+            },
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Uploaded MP3 file is empty."
+
+
+def test_sync_rejects_empty_lyrics():
+    from tests.test_sylt_writer import _SILENT_MP3_BYTES
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync",
+            files={
+                "mp3": ("track.mp3", _SILENT_MP3_BYTES, "audio/mpeg"),
+                "lyrics": ("lyrics.txt", b"  \n\t", "text/plain"),
+            },
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Lyrics file is empty."
+
+
+def test_get_client_ip_prefers_x_forwarded_for():
+    from unittest.mock import MagicMock
+
+    from app.main import _get_client_ip
+
+    request = MagicMock()
+    request.headers.get.return_value = "203.0.113.7, 10.0.0.1"
+    assert _get_client_ip(request) == "203.0.113.7"
+
+
+def test_get_client_ip_falls_back_to_remote_address(monkeypatch):
+    from unittest.mock import MagicMock
+
+    import app.main as main
+
+    monkeypatch.setattr(main, "get_remote_address", lambda _request: "198.51.100.42")
+
+    request = MagicMock()
+    request.headers.get.return_value = None
+    assert main._get_client_ip(request) == "198.51.100.42"
+
+
 def test_content_disposition_attachment_ascii_and_utf8():
     from app.main import _content_disposition_attachment
 
