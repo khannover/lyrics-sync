@@ -144,6 +144,14 @@ Smoke tests in `tests/test_api_smoke.py` do not run Whisper. To validate alignme
 
 ```bash
 cd /mnt/c/projects/lyrics-sync
+./scripts/quality_gate.sh
+```
+
+The gate runs `curl /health`, fast pytest (`test_sync_quality_unit` + `test_api_smoke`), then the live MP3 check. Set `SKIP_LIVE_SYNC=1` to skip Whisper. Do **not** pipe `live_sync_quality_check.py` through `tee` — that breaks exit-code checks.
+
+Extended local pytest (cleanup + async jobs):
+
+```bash
 pytest tests/test_sync_quality_unit.py tests/test_api_smoke.py tests/test_cleanup.py tests/test_async_jobs.py -q
 LIVE_SYNC_TRACK_ID=c7721ca1-e8d2-4045-8a5b-e53cfb29e7d2 \
   python3 scripts/live_sync_quality_check.py
