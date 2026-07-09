@@ -81,6 +81,35 @@ def test_sync_mp3_only_returns_429_when_hourly_rate_limit_exceeded():
         limiter.reset()
 
 
+def test_enqueue_sync_job_returns_429_when_hourly_rate_limit_exceeded():
+    """slowapi counts rejected validation requests; 61st POST /sync/jobs should 429."""
+    limiter.reset()
+    try:
+        with TestClient(app) as client:
+            for _ in range(60):
+                response = client.post(
+                    "/sync/jobs",
+                    data=_async_job_form(),
+                    files={
+                        "mp3": ("track.flac", b"fake-audio", "audio/flac"),
+                        "lyrics": ("lyrics.txt", b"hello", "text/plain"),
+                    },
+                )
+                assert response.status_code == 400
+            response = client.post(
+                "/sync/jobs",
+                data=_async_job_form(),
+                files={
+                    "mp3": ("track.flac", b"fake-audio", "audio/flac"),
+                    "lyrics": ("lyrics.txt", b"hello", "text/plain"),
+                },
+            )
+        assert response.status_code == 429
+        assert "rate" in response.text.lower() or response.json().get("error")
+    finally:
+        limiter.reset()
+
+
 def test_get_sync_job_unknown_returns_404():
     with TestClient(app) as client:
         response = client.get("/sync/jobs/00000000-0000-0000-0000-000000000000")
