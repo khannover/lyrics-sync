@@ -1,7 +1,11 @@
 """Lightweight FastAPI smoke tests (no Whisper / alignment)."""
 
+import uuid
+
+import pytest
 from fastapi.testclient import TestClient
 
+import app.async_jobs as async_jobs
 from app.main import app
 
 
@@ -330,6 +334,52 @@ def test_enqueue_sync_job_rejects_data_scheme_callback_url():
         )
     assert response.status_code == 400
     assert response.json()["detail"] == "callback_url must be a valid http or https URL."
+
+
+@pytest.mark.parametrize(
+    "callback_url",
+    [
+        "http://",
+        "http:///hook",
+        "http:evil.example/hook",
+    ],
+)
+def test_enqueue_sync_job_rejects_http_url_without_host(callback_url):
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/jobs",
+            data=_async_job_form(callback_url=callback_url),
+            files=_async_job_files(),
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "callback_url must be a valid http or https URL."
+
+
+@pytest.fixture
+def stub_async_run_job(monkeypatch):
+    async def _complete_immediately(job):
+        job.status = "completed"
+        job.completed_at = 1.0
+
+    monkeypatch.setattr(async_jobs, "run_job", _complete_immediately)
+
+
+def test_enqueue_sync_job_accepts_https_returns_202(stub_async_run_job):
+    from tests.test_sylt_writer import _SILENT_MP3_BYTES
+
+    track_id = f"smoke-{uuid.uuid4()}"
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/jobs",
+            data=_async_job_form(track_id=track_id),
+            files=_async_job_files(_SILENT_MP3_BYTES),
+        )
+    assert response.status_code == 202
+    body = response.json()
+    assert body["track_id"] == track_id
+    assert body["status"] == "queued"
+    assert body["manual"] is False
+    assert body["job_id"]
 
 
 def test_normalize_callback_url_strips_whitespace():
