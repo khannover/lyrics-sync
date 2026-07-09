@@ -48,6 +48,34 @@ def test_evaluate_sync_report_rejects_fallback():
     assert any("fallback" in i for i in v.issues)
 
 
+def test_evaluate_sync_report_flags_timestamp_regression():
+    report = {
+        "quality": "good",
+        "warnings": [],
+        "line_count": 3,
+        "duration_ms": 120_000,
+        "whisper_word_count": 40,
+    }
+    lrc = "[00:10.00]a\n[00:30.00]b\n[00:20.00]c\n"
+    v = evaluate_sync_report(report, lrc_text=lrc)
+    assert not v.ok
+    assert any("regression" in i for i in v.issues)
+
+
+def test_evaluate_sync_report_flags_low_coverage():
+    report = {
+        "quality": "good",
+        "warnings": [],
+        "line_count": 4,
+        "duration_ms": 300_000,
+        "whisper_word_count": 40,
+    }
+    lrc = "\n".join(f"[00:{i * 5:02d}.00]line {i}" for i in range(4))
+    v = evaluate_sync_report(report, lrc_text=lrc, min_coverage_ratio=0.35)
+    assert not v.ok
+    assert any("coverage" in i for i in v.issues)
+
+
 def test_wait_for_service_ready_retries_502(monkeypatch):
     from unittest.mock import MagicMock
 
