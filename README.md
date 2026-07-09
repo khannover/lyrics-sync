@@ -133,7 +133,7 @@ LIVE_SYNC_TRACK_ID=c7721ca1-e8d2-4045-8a5b-e53cfb29e7d2 \
 Uses a Bancamp dev track (MP3 + DB lyrics) by default when `LIVE_SYNC_TRACK_ID` is set. The script waits up to 90s for `/health` through nginx (502/503 after container restart). Gates: `quality` is `good` or `degraded` (not `fallback`), monotonic LRC timestamps, minimum coverage and `whisper_word_count`. Response headers `X-Sync-Quality` / `X-Sync-Warning` and `*_sync_report.json` in the ZIP are checked.
 
 ### Async sync (`POST /sync/jobs`, `GET /sync/jobs/{job_id}`)
-Queue alignment in the background and receive a JSON webhook at `callback_url` when done. Optional header `X-Lyrics-Sync-Token` if `LYRIC_SYNC_CALLBACK_SECRET` is set. Poll status with `GET /sync/jobs/{job_id}`.
+Queue alignment in the background and receive a JSON webhook at `callback_url` when done (`callback_url` must be `http` or `https`). Optional header `X-Lyrics-Sync-Token` if `LYRIC_SYNC_CALLBACK_SECRET` is set. Poll status with `GET /sync/jobs/{job_id}`.
 
 ## Web UI
 A simple web interface is available at the root URL: `http://localhost:8005/`.

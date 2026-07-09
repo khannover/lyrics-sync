@@ -11,7 +11,7 @@ from pathlib import Path
 from io import BytesIO
 from zipfile import ZipFile
 from contextlib import asynccontextmanager
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -46,6 +46,19 @@ def _get_client_ip(request: Request) -> str:
         return forwarded_for.split(",", 1)[0].strip()
 
     return get_remote_address(request)
+
+
+def _normalize_callback_url(callback_url: str) -> str:
+    url = (callback_url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="callback_url is required.")
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(
+            status_code=400,
+            detail="callback_url must be a valid http or https URL.",
+        )
+    return url
 
 
 limiter = Limiter(key_func=_get_client_ip)
@@ -431,8 +444,7 @@ async def enqueue_sync_job(
         raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
     if not (track_id or "").strip():
         raise HTTPException(status_code=400, detail="track_id is required.")
-    if not (callback_url or "").strip():
-        raise HTTPException(status_code=400, detail="callback_url is required.")
+    callback_url = _normalize_callback_url(callback_url)
 
     upload_dir = WORK_DIR / f"upload-{uuid.uuid4()}"
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -452,7 +464,7 @@ async def enqueue_sync_job(
 
         job = create_job(
             track_id=track_id.strip(),
-            callback_url=callback_url.strip(),
+            callback_url=callback_url,
             manual=bool(manual),
             mp3_path=mp3_path,
             lyrics_path=lyrics_path,
