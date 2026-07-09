@@ -119,6 +119,19 @@ Returns the status of the job queue.
 ### 5. `GET /health`
 Returns health status and disk usage statistics.
 
+## Live quality check (real MP3)
+
+Smoke tests in `tests/test_api_smoke.py` do not run Whisper. To validate alignment on a real track against a running service:
+
+```bash
+cd /mnt/c/projects/lyrics-sync
+pytest tests/test_sync_quality_unit.py -q
+LIVE_SYNC_TRACK_ID=c7721ca1-e8d2-4045-8a5b-e53cfb29e7d2 \
+  python3 scripts/live_sync_quality_check.py
+```
+
+Uses a Bancamp dev track (MP3 + DB lyrics) by default when `LIVE_SYNC_TRACK_ID` is set. The script waits up to 90s for `/health` through nginx (502/503 after container restart). Gates: `quality` is `good` or `degraded` (not `fallback`), monotonic LRC timestamps, minimum coverage and `whisper_word_count`. Response headers `X-Sync-Quality` / `X-Sync-Warning` and `*_sync_report.json` in the ZIP are checked.
+
 ### Async sync (`POST /sync/jobs`, `GET /sync/jobs/{job_id}`)
 Queue alignment in the background and receive a JSON webhook at `callback_url` when done. Optional header `X-Lyrics-Sync-Token` if `LYRIC_SYNC_CALLBACK_SECRET` is set. Poll status with `GET /sync/jobs/{job_id}`.
 
