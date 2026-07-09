@@ -561,6 +561,9 @@ async def lyrics_from_mp3(
         with open(mp3_path, "wb") as f:
             shutil.copyfileobj(mp3.file, f)
 
+        if mp3_path.stat().st_size == 0:
+            raise HTTPException(status_code=400, detail="Uploaded MP3 file is empty.")
+
         _job_log(
             job_id,
             "stage=extract_start",

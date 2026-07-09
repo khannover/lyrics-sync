@@ -122,4 +122,91 @@ def test_content_disposition_attachment_ascii_and_utf8():
 
     header_unicode = _content_disposition_attachment("Müller_synced.zip")
     assert "filename=" in header_unicode
-    assert "M%C3%BCller" in header_unicode or "Müller" in header_unicode
+    assert "Müller" in header_unicode or "M%C3%BCller" in header_unicode
+
+
+def test_lyrics_from_mp3_rejects_non_mp3_extension():
+    with TestClient(app) as client:
+        response = client.post(
+            "/lyrics/from-mp3",
+            files={"mp3": ("track.flac", b"fake-audio", "audio/flac")},
+        )
+    assert response.status_code == 400
+    assert ".mp3" in response.json()["detail"]
+
+
+def test_lyrics_from_mp3_rejects_empty_mp3():
+    with TestClient(app) as client:
+        response = client.post(
+            "/lyrics/from-mp3",
+            files={"mp3": ("track.mp3", b"", "audio/mpeg")},
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Uploaded MP3 file is empty."
+
+
+def test_lyrics_from_mp3_returns_sources_json_for_tagless_mp3():
+    from tests.test_sylt_writer import _SILENT_MP3_BYTES
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/lyrics/from-mp3",
+            files={"mp3": ("track.mp3", _SILENT_MP3_BYTES, "audio/mpeg")},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) >= {"plain_lyrics", "timed_lyrics_lrc", "sources"}
+    assert body["sources"] == {"uslt": False, "txxx_lyrics": False, "sylt": False}
+
+
+def _async_job_form(**overrides):
+    base = {
+        "track_id": "cron-tick-track",
+        "callback_url": "https://example.com/lyrics-sync-hook",
+        "manual": "false",
+    }
+    base.update(overrides)
+    return base
+
+
+def _async_job_files(mp3_bytes=b"fake-audio", lyrics_text=b"line one"):
+    return {
+        "mp3": ("track.mp3", mp3_bytes, "audio/mpeg"),
+        "lyrics": ("lyrics.txt", lyrics_text, "text/plain"),
+    }
+
+
+def test_enqueue_sync_job_rejects_non_mp3():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/jobs",
+            data=_async_job_form(),
+            files={
+                "mp3": ("track.wav", b"fake", "audio/wav"),
+                "lyrics": ("lyrics.txt", b"line", "text/plain"),
+            },
+        )
+    assert response.status_code == 400
+    assert ".mp3" in response.json()["detail"]
+
+
+def test_enqueue_sync_job_rejects_blank_track_id():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/jobs",
+            data=_async_job_form(track_id="   "),
+            files=_async_job_files(),
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "track_id is required."
+
+
+def test_enqueue_sync_job_rejects_blank_callback_url():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/jobs",
+            data=_async_job_form(callback_url="\t"),
+            files=_async_job_files(),
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "callback_url is required."
