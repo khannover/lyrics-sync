@@ -69,6 +69,8 @@ alignment_active = 0
 active_job_ids: set[str] = set()
 SYNC_RATE_LIMIT = os.environ.get("SYNC_RATE_LIMIT", "60/hour")
 SYNC_MP3_ONLY_RATE_LIMIT = os.environ.get("SYNC_MP3_ONLY_RATE_LIMIT", SYNC_RATE_LIMIT)
+# Async job enqueue is cheap (queues work) and idempotent by track_id — allow large libraries.
+SYNC_JOBS_RATE_LIMIT = os.environ.get("SYNC_JOBS_RATE_LIMIT", "1000/hour")
 
 
 def _configure_logging() -> None:
@@ -447,7 +449,7 @@ async def sync_lyrics(
     summary="Queue async lyric sync; results POST to callback_url when done",
     status_code=202,
 )
-@limiter.limit(SYNC_RATE_LIMIT)
+@limiter.limit(SYNC_JOBS_RATE_LIMIT)
 async def enqueue_sync_job(
     request: Request,
     mp3: UploadFile = File(..., description="MP3 audio file"),

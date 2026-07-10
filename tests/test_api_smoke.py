@@ -90,11 +90,17 @@ def test_sync_mp3_only_returns_429_when_hourly_rate_limit_exceeded():
         limiter.reset()
 
 
-def test_enqueue_sync_job_returns_429_when_hourly_rate_limit_exceeded():
+def test_enqueue_sync_job_returns_429_when_hourly_rate_limit_exceeded(monkeypatch):
     """slowapi counts rejected validation requests; 61st POST /sync/jobs should 429."""
-    limiter.reset()
+    import importlib
+
+    monkeypatch.setenv("SYNC_JOBS_RATE_LIMIT", "60/hour")
+    importlib.reload(main)
+    jobs_app = main.app
+    jobs_limiter = main.limiter
+    jobs_limiter.reset()
     try:
-        with TestClient(app) as client:
+        with TestClient(jobs_app) as client:
             for _ in range(60):
                 response = client.post(
                     "/sync/jobs",
@@ -116,7 +122,9 @@ def test_enqueue_sync_job_returns_429_when_hourly_rate_limit_exceeded():
         assert response.status_code == 429
         assert "rate" in response.text.lower() or response.json().get("error")
     finally:
-        limiter.reset()
+        jobs_limiter.reset()
+        monkeypatch.delenv("SYNC_JOBS_RATE_LIMIT", raising=False)
+        importlib.reload(main)
 
 
 def test_get_sync_job_unknown_returns_404():
