@@ -103,6 +103,32 @@ def test_create_job_idempotent_while_queued(tmp_path, monkeypatch):
     assert aj._queue.qsize() == 1
 
 
+def test_persisted_queued_job_is_restored_after_restart(tmp_path, monkeypatch):
+    monkeypatch.setattr(aj, "WORK_DIR", tmp_path / "work")
+    aj.WORK_DIR.mkdir(parents=True, exist_ok=True)
+    mp3_path, lyrics_path = _write_inputs(tmp_path)
+    first = aj.create_job(
+        track_id="restart-track",
+        callback_url="https://example.com/callback",
+        manual=False,
+        mp3_path=mp3_path,
+        lyrics_path=lyrics_path,
+    )
+    assert (first.job_dir / "job.json").exists()
+
+    aj._jobs.clear()
+    aj._track_jobs.clear()
+    while not aj._queue.empty():
+        aj._queue.get_nowait()
+    restored = aj.load_persisted_jobs()
+
+    assert restored == 1
+    snapshot = aj.get_job(first.job_id)
+    assert snapshot["status"] == "queued"
+    assert snapshot["track_id"] == "restart-track"
+    assert aj._queue.qsize() == 1
+
+
 def test_queue_stats_reflects_job_statuses(tmp_path, monkeypatch):
     monkeypatch.setattr(aj, "WORK_DIR", tmp_path / "work")
     aj.WORK_DIR.mkdir(parents=True, exist_ok=True)

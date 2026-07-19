@@ -26,6 +26,8 @@ from app.alignment import AlignmentResult, align_lyrics_to_audio
 from app.async_jobs import (
     create_job,
     get_job,
+    ack_job,
+    cleanup_protected_names,
     queue_stats,
     start_worker,
     stop_worker,
@@ -59,6 +61,12 @@ def _normalize_callback_url(callback_url: str) -> str:
             detail="callback_url must be a valid http or https URL.",
         )
     return url
+
+
+def _verify_internal_token(request: Request) -> None:
+    expected = os.environ.get("LYRIC_SYNC_CALLBACK_SECRET", "").strip()
+    if expected and request.headers.get("X-Lyrics-Sync-Token", "") != expected:
+        raise HTTPException(status_code=401, detail="Invalid lyrics-sync token")
 
 
 limiter = Limiter(key_func=_get_client_ip)
@@ -301,7 +309,7 @@ async def lifespan(app: FastAPI):
                     WORK_DIR,
                     now=time.time(),
                     max_age_seconds=MAX_TEMP_AGE_SECONDS,
-                    protected_names=active_job_ids,
+                    protected_names=active_job_ids | cleanup_protected_names(),
                 )
                 if removed:
                     logger.info(
@@ -506,11 +514,21 @@ async def enqueue_sync_job(
 
 
 @app.get("/sync/jobs/{job_id}", summary="Poll async lyric-sync job status")
-async def get_sync_job(job_id: str):
+async def get_sync_job(job_id: str, request: Request):
+    _verify_internal_token(request)
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@app.post("/sync/jobs/{job_id}/ack", summary="Acknowledge durable result consumption")
+async def acknowledge_sync_job(job_id: str, request: Request):
+    _verify_internal_token(request)
+    job = ack_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"status": "acked", "job_id": job_id, "callback_status": job["callback_status"]}
 
 
 @app.post("/sync/mp3-only", summary="Upload MP3 + lyrics, get back only the tagged MP3")
