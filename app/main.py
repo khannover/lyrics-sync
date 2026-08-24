@@ -22,7 +22,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.alignment import AlignmentResult, align_lyrics_to_audio
+from app.alignment import AlignmentResult, align_lyrics_to_audio, transcribe_audio_to_text
 from app.async_jobs import (
     create_job,
     get_job,
@@ -187,6 +187,59 @@ async def _run_alignment(
             _job_log(
                 job_id,
                 "stage=align_failed",
+                file=mp3_path.name,
+                elapsed=f"{time.monotonic() - started:.1f}s",
+            )
+        raise
+
+
+
+async def _run_transcription(
+    job_id: str,
+    mp3_path: Path,
+    job_dir: Path,
+) -> str:
+    global waiting_jobs, alignment_active
+    _job_log(
+        job_id,
+        "stage=queued_transcription",
+        file=mp3_path.name,
+        waiting=waiting_jobs,
+        slots=MAX_CONCURRENT_JOBS,
+    )
+
+    waiting_jobs += 1
+    started = time.monotonic()
+    acquired_slot = False
+    try:
+        async with semaphore:
+            waiting_jobs -= 1
+            acquired_slot = True
+            alignment_active += 1
+            try:
+                _touch_job_dir(job_dir)
+                _assert_audio_ready(job_id, mp3_path, job_dir)
+                _job_log(
+                    job_id,
+                    "stage=transcribe_start",
+                    file=mp3_path.name,
+                )
+                lyrics_text = await asyncio.to_thread(
+                    transcribe_audio_to_text,
+                    str(mp3_path),
+                    str(job_dir),
+                    job_id=job_id,
+                )
+                return lyrics_text
+            finally:
+                alignment_active -= 1
+    except BaseException as exc:
+        if not acquired_slot:
+            waiting_jobs = max(0, waiting_jobs - 1)
+        if isinstance(exc, Exception):
+            _job_log(
+                job_id,
+                "stage=transcribe_failed",
                 file=mp3_path.name,
                 elapsed=f"{time.monotonic() - started:.1f}s",
             )
@@ -675,6 +728,103 @@ async def lyrics_from_mp3(
         raise HTTPException(status_code=500, detail=f"Lyrics extraction failed: {e}")
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
+
+
+
+@app.post(
+    "/lyrics/extract",
+    summary="Extract embedded lyrics, or transcribe from audio if none exist"
+)
+@limiter.limit(SYNC_RATE_LIMIT)
+async def extract_or_transcribe_lyrics(
+    request: Request,
+    mp3: UploadFile = File(..., description="MP3 audio file"),
+):
+    if not mp3.filename.lower().endswith(".mp3"):
+        raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
+
+    job_id = str(uuid.uuid4())
+    job_dir = WORK_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _register_job(job_id)
+    request_started = time.monotonic()
+    client_ip = _get_client_ip(request)
+
+    try:
+        _job_log(
+            job_id,
+            "stage=request_start",
+            endpoint="/lyrics/extract",
+            client=client_ip,
+            file=mp3.filename,
+        )
+
+        mp3_path = job_dir / "input.mp3"
+        with open(mp3_path, "wb") as f:
+            shutil.copyfileobj(mp3.file, f)
+
+        if mp3_path.stat().st_size == 0:
+            raise HTTPException(status_code=400, detail="Uploaded MP3 file is empty.")
+
+        # 1. Try to extract existing embedded lyrics
+        _job_log(
+            job_id,
+            "stage=extract_tags_start",
+            file=mp3.filename,
+            mp3_bytes=mp3_path.stat().st_size,
+        )
+        tag_result = await asyncio.to_thread(extract_lyrics_from_mp3, str(mp3_path))
+        
+        has_embedded = tag_result.get("plain_lyrics") or tag_result.get("timed_lyrics_lrc")
+        if has_embedded:
+            _job_log(
+                job_id,
+                "stage=request_done",
+                endpoint="/lyrics/extract",
+                file=mp3.filename,
+                elapsed=f"{time.monotonic() - request_started:.1f}s",
+                source="embedded",
+            )
+            return {
+                "source": "embedded",
+                "plain_lyrics": tag_result.get("plain_lyrics"),
+                "timed_lyrics_lrc": tag_result.get("timed_lyrics_lrc"),
+                "notes": tag_result.get("notes"),
+            }
+
+        # 2. If no embedded lyrics, convert to WAV and transcribe using Whisper
+        mp3_path = _ensure_taggable_mp3(mp3_path, job_dir)
+        _job_log(
+            job_id,
+            "stage=transcribe_fallback",
+            file=mp3.filename,
+        )
+        transcribed_text = await _run_transcription(job_id, mp3_path, job_dir)
+
+        _job_log(
+            job_id,
+            "stage=request_done",
+            endpoint="/lyrics/extract",
+            file=mp3.filename,
+            elapsed=f"{time.monotonic() - request_started:.1f}s",
+            source="transcription",
+        )
+        return {
+            "source": "transcription",
+            "plain_lyrics": transcribed_text,
+            "timed_lyrics_lrc": None,
+            "notes": "Lyrics transcribed from audio using AI.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[sync] job=%s stage=request_failed", job_id)
+        raise HTTPException(status_code=500, detail=f"Lyrics extraction/transcription failed: {e}")
+    finally:
+        _unregister_job(job_id)
+        shutil.rmtree(job_dir, ignore_errors=True)
+
 
 
 @app.get("/queue", summary="Returns current number of waiting jobs")

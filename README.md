@@ -127,7 +127,22 @@ curl -X POST "http://localhost:8005/lyrics/from-mp3" \
   -F "mp3=@path/to/song.mp3"
 ```
 
-### 4. `GET /queue`
+### 4. `POST /lyrics/extract`
+Extract embedded lyrics from an MP3, or transcribe the audio using Whisper if no lyrics are embedded.
+
+Returns JSON with:
+- `source`: `"embedded"` or `"transcription"`
+- `plain_lyrics`: extracted or transcribed lyrics, or `null`
+- `timed_lyrics_lrc`: LRC-format timed lyrics (only if embedded), or `null`
+- `notes`: diagnostic information
+
+**Example Curl:**
+```bash
+curl -X POST "http://localhost:8005/lyrics/extract" \
+  -F "mp3=@path/to/song.mp3"
+```
+
+### 5. `GET /queue`
 Returns alignment semaphore and async job counts:
 
 - `waiting_jobs`: requests blocked on the Whisper semaphore
@@ -135,7 +150,7 @@ Returns alignment semaphore and async job counts:
 - `active_jobs`: alignments currently running
 - `async_jobs`: `{ "queued", "processing", "completed", "failed" }` counts for `POST /sync/jobs`
 
-### 5. `GET /health`
+### 6. `GET /health`
 Returns health status, service `version`, `max_concurrent_jobs` (from `MAX_CONCURRENT_JOBS`), Whisper semaphore snapshot (`alignment`: `waiting_jobs`, `active_jobs`, `total_slots`), async job counts (`async_jobs`), and disk usage statistics for the work directory.
 
 ## Live quality check (real MP3)

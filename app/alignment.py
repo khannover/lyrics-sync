@@ -724,3 +724,43 @@ def align_lyrics_to_audio(
         warnings=warnings,
         report=report,
     )
+def transcribe_audio_to_text(mp3_path: str, job_dir: str, job_id: Optional[str] = None) -> str:
+    """
+    Transcribe audio to plain text lyrics using faster-whisper.
+    Used as a fallback when no embedded lyrics are present.
+    """
+    wav_path = _convert_to_wav(mp3_path, job_dir, job_id)
+    model = _get_model()
+
+    _job_log(
+        job_id,
+        "stage=transcribe_text_start",
+        vad_filter=True,
+    )
+    started = time.monotonic()
+
+    # We use beam_size=5 for better text quality, and VAD filter to skip silence.
+    segments, info = model.transcribe(
+        wav_path,
+        beam_size=5,
+        word_timestamps=False,
+        vad_filter=True,
+    )
+
+    text_lines = []
+    for segment in segments:
+        line = segment.text.strip()
+        if line:
+            text_lines.append(line)
+
+    elapsed = time.monotonic() - started
+    _job_log(
+        job_id,
+        "stage=transcribe_text_done",
+        language=info.language,
+        language_prob=f"{info.language_probability:.2f}",
+        lines=len(text_lines),
+        elapsed=f"{elapsed:.1f}s",
+    )
+
+    return "\n".join(text_lines)
