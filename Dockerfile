@@ -42,7 +42,7 @@ COPY app/ ./app/
 RUN mkdir -p /app/models
 
 # Pre-download model at build time
-ARG MODEL_SIZE=medium
+ARG MODEL_SIZE=small
 ENV MODEL_SIZE=${MODEL_SIZE}
 RUN python -c "from app.alignment import ensure_model; ensure_model()"
 

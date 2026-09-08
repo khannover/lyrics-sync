@@ -14,22 +14,25 @@ services:
     build:
       context: .
       args:
-        MODEL_SIZE: medium
+        MODEL_SIZE: small
     expose:
       - "8000"
     volumes:
       - model-cache:/app/models
       - lyric-sync-work:/tmp/lyric-sync
     environment:
-      - MODEL_SIZE=medium
+      - MODEL_SIZE=small
       - WHISPER_COMPUTE_TYPE=int8
       - WHISPER_CPU_THREADS=4
       - MAX_CONCURRENT_JOBS=1
       - SYNC_RATE_LIMIT=60/hour
       - SYNC_JOBS_RATE_LIMIT=1000/hour
-      - LYRIC_SYNC_CALLBACK_SECRET=${LYRIC_SYNC_CALLBACK_SECRET:-}
+      - LYRIC_SYNC_CALLBACK_SECRET=${LYRIC_SYNC_CALLBACK_SECRET:-generate_a_random_secret_here}
       - LYRIC_SYNC_CALLBACK_RETRIES=5
     restart: unless-stopped
+    networks:
+      - default
+      - shared_net
 
   tarpit:
     build:
@@ -45,3 +48,9 @@ services:
 volumes:
   model-cache:
   lyric-sync-work:
+
+networks:
+  default:
+  shared_net:
+    name: bancamp-net
+    external: true
