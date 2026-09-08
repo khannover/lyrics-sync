@@ -27,7 +27,7 @@ Docker Compose orchestrates three services:
 - `lyric-sync`: Internal FastAPI backend on internal network port `8000`.
 - `tarpit`: Internal sink for scanner/bot traffic.
 
-> **Note:** This setup is HTTP-only by default and requires no domain name or TLS certificates to run locally. In production, it sits behind reverse proxy HTTPS (e.g. `https://lyricsync.bancamp.de`).
+> **Note:** This setup is HTTP-only by default and requires no domain name or TLS certificates to run locally. In production, it sits behind reverse proxy HTTPS.
 
 ### Environment Variables
 
@@ -278,7 +278,7 @@ Copy and paste the instruction prompt below into your agent's system prompt, `.c
 ```markdown
 ## Lyrics Sync Service — Agent Capabilities & Instructions
 
-You have access to a Lyrics Sync Service running at `http://localhost:8005` (or production `https://lyricsync.bancamp.de`).
+You have access to a Lyrics Sync Service running at `http://localhost:8005`.
 The service synchronizes plain lyrics to MP3 audio using faster-whisper forced alignment and DTW, extracts and embeds ID3 SYLT/USLT tags, and provides AI audio transcription.
 
 ### When to Call Which Endpoint:
