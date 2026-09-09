@@ -35,6 +35,7 @@ from app.async_jobs import (
 from app.sylt_writer import write_sylt_tag, write_lrc_file
 from app.lyrics_tag_reader import extract_lyrics_from_mp3, strip_style_preamble
 from app.audio_analyzer import analyze_audio_profile
+from app.content_filter import evaluate_content_rating
 
 logger = logging.getLogger(__name__)
 
@@ -716,6 +717,7 @@ async def lyrics_from_mp3(
             mp3_bytes=mp3_path.stat().st_size,
         )
         result = await asyncio.to_thread(extract_lyrics_from_mp3, str(mp3_path))
+        result["content_rating"] = evaluate_content_rating(result.get("plain_lyrics"))
         _job_log(
             job_id,
             "stage=request_done",
@@ -797,6 +799,7 @@ async def extract_or_transcribe_lyrics(
                 "style_tags": tag_result.get("style_tags", []),
                 "style_prompt_raw": tag_result.get("style_prompt_raw"),
                 "bpm": tag_result.get("bpm"),
+                "content_rating": evaluate_content_rating(tag_result.get("plain_lyrics")),
                 "notes": tag_result.get("notes"),
             }
 
@@ -825,6 +828,7 @@ async def extract_or_transcribe_lyrics(
             "style_tags": tag_result.get("style_tags", []),
             "style_prompt_raw": tag_result.get("style_prompt_raw"),
             "bpm": tag_result.get("bpm"),
+            "content_rating": evaluate_content_rating(transcribed_text),
             "notes": "Lyrics transcribed from audio using AI.",
         }
 
@@ -840,7 +844,7 @@ async def extract_or_transcribe_lyrics(
 
 @app.post(
     "/audio/analyze",
-    summary="Multi-tier audio analysis: metadata, acoustic features, and neural genre classification",
+    summary="Multi-tier audio analysis: metadata, acoustic features, neural genres, copyright fingerprint, and AI provenance",
 )
 @limiter.limit(SYNC_RATE_LIMIT)
 async def analyze_audio(
@@ -849,6 +853,8 @@ async def analyze_audio(
     include_signal: bool = Form(default=True, description="Extract acoustic signal features (BPM, key, energy)"),
     force_neural: bool = Form(default=False, description="Always run Tier 3 ONNX neural genre classifier"),
     top_k_genres: int = Form(default=5, description="Number of top neural genre predictions"),
+    include_fingerprint: bool = Form(default=True, description="Generate Chromaprint / AcoustID copyright fingerprint"),
+    include_ai_provenance: bool = Form(default=True, description="Detect Suno/Udio/AI watermark and spectral artifacts"),
 ):
     if not mp3.filename.lower().endswith(".mp3"):
         raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
@@ -881,6 +887,8 @@ async def analyze_audio(
             include_signal=include_signal,
             force_neural=force_neural,
             top_k_genres=top_k_genres,
+            include_fingerprint=include_fingerprint,
+            include_ai_provenance=include_ai_provenance,
         )
 
         _job_log(

@@ -92,3 +92,42 @@ class TestAudioAnalyzerCascade:
         assert profile["bpm"] == 100
         assert profile["energy"] == "low"
         assert profile["tier_breakdown"]["tier3_neural"]["ran"] is True
+        assert "content_rating" in profile
+        assert "copyright_fingerprint" in profile
+        assert "ai_provenance" in profile
+
+    @patch("app.audio_analyzer.extract_lyrics_from_mp3")
+    @patch("app.audio_analyzer.generate_audio_fingerprint")
+    @patch("app.audio_analyzer.detect_ai_provenance")
+    def test_safety_and_provenance_integration(
+        self, mock_prov, mock_fp, mock_lyrics
+    ):
+        mock_lyrics.return_value = {
+            "plain_lyrics": "Fuck this holy shit",
+            "timed_lyrics_lrc": None,
+            "genres": ["Punk"],
+            "style_tags": [],
+            "style_prompt_raw": None,
+            "bpm": 150,
+            "sources": {"uslt": True},
+            "notes": None,
+        }
+        mock_fp.return_value = {
+            "acoustid_fingerprint": "AQADTEST12345",
+            "duration_sec": 120.0,
+            "algorithm": "chromaprint",
+        }
+        mock_prov.return_value = {
+            "is_synthetic": True,
+            "confidence": 0.99,
+            "detected_source": "suno",
+            "signals": {"metadata_marker": True},
+        }
+
+        profile = analyze_audio_profile("/mock/track.mp3", include_signal=False)
+        assert profile["content_rating"]["is_explicit"] is True
+        assert profile["content_rating"]["rating"] == "explicit"
+        assert "profanity" in profile["content_rating"]["categories"]
+        assert profile["copyright_fingerprint"]["acoustid_fingerprint"] == "AQADTEST12345"
+        assert profile["ai_provenance"]["is_synthetic"] is True
+        assert profile["ai_provenance"]["detected_source"] == "suno"

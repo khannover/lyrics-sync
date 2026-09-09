@@ -8,7 +8,7 @@ Copy and paste this prompt into your agent's system prompt, `.cursorrules`, `.wi
 ## Service Role & Capabilities: Lyrics Sync Service
 
 You have access to a local or remote **Lyrics Sync Service** (default: `http://localhost:8005`, production: `https://lyricsync.bancamp.de`).
-The service synchronizes plain-text lyrics with MP3 audio files using **faster-whisper** (forced alignment) and **Dynamic Time Warping (DTW)**, manages ID3 metadata (SYLT synchronized lyrics frames, USLT, TCON, TBPM), and provides **multi-tier musical profile & genre analysis** (ID3 + AI prompts, acoustic BPM/key/energy via librosa, and zero-PyTorch neural classification via ONNX-runtime).
+The service synchronizes plain-text lyrics with MP3 audio files using **faster-whisper** (forced alignment) and **Dynamic Time Warping (DTW)**, manages ID3 metadata (SYLT synchronized lyrics frames, USLT, TCON, TBPM), provides **multi-tier musical profile & genre analysis** (ID3 + AI prompts, acoustic BPM/key/energy via librosa, and zero-PyTorch neural classification via ONNX-runtime), and provides **NSFW/explicit content filtering**, **Chromaprint copyright fingerprinting**, and **AI watermark & provenance detection**.
 
 ### Base URL Configuration
 - Local instance: `http://localhost:8005`
@@ -20,13 +20,18 @@ Always use the configured base URL when issuing requests.
 
 ### Decision Matrix: Which Endpoint Should You Call?
 
-1. **You want to extract musical profile, genres, BPM, key, and energy from an MP3:**
+1. **You want to extract musical profile, genres, BPM, key, energy, copyright fingerprint, AI provenance, and content rating:**
    → Use `POST /audio/analyze`
    - Runs a 3-tier cascade:
      1. Instant ID3 tags (`TCON`, `TBPM`) + Suno/Udio prompt parsing (`[Style: ...]`).
      2. Acoustic signal extraction (exact BPM, energy: `low`/`medium`/`high`, musical key: `B minor`).
      3. Neural genre classification via Discogs-EffNet ONNX model (runs in < 150ms on CPU).
-   - Fast, offline, zero-PyTorch. Use `force_neural=true` to force deep neural classification even if tags exist.
+   - Fast, offline, zero-PyTorch.
+   - Includes:
+     - `content_rating`: `clean`, `mild`, `explicit` with flagged terms
+     - `copyright_fingerprint`: Chromaprint audio fingerprint string & duration for AcoustID lookup
+     - `ai_provenance`: Suno/Udio/AI metadata markers, ultrasonic roll-off analysis, confidence score
+   - Options: `force_neural=true`, `include_fingerprint=true`, `include_ai_provenance=true`.
 
 2. **You want to get lyrics from an MP3 file (smart fallback + style tags):**
    → Use `POST /lyrics/extract`
@@ -68,7 +73,7 @@ Always use the configured base URL when issuing requests.
 
 ### Endpoint Reference & cURL Recipes
 
-#### 1. Analyze Musical Profile & Genres (Multi-Tier Cascade)
+#### 1. Analyze Musical Profile, Safety, Fingerprint & Provenance
 ```bash
 curl -s -X POST "http://localhost:8005/audio/analyze" \
   -F "mp3=@/path/to/track.mp3"
@@ -83,6 +88,29 @@ curl -s -X POST "http://localhost:8005/audio/analyze" \
   "bpm": 123,
   "key": "B minor",
   "energy": "high",
+  "content_rating": {
+    "rating": "clean",
+    "matched_categories": [],
+    "flagged_terms": []
+  },
+  "copyright_fingerprint": {
+    "fingerprint": "AQAAZEqSpEkSRYmSZUkU...",
+    "duration_sec": 182.62,
+    "algorithm": "chromaprint"
+  },
+  "ai_provenance": {
+    "is_synthetic": true,
+    "confidence": 0.99,
+    "detected_source": "suno",
+    "indicators": {
+      "has_suno_url": true,
+      "has_suno_comment": true,
+      "has_style_prompt": true,
+      "has_synthetic_brickwall": true,
+      "spectral_rolloff_hz": 16345.2,
+      "ultrasonic_ratio": 0.0001
+    }
+  },
   "lyrics": {
     "has_embedded": true,
     "plain_lyrics": "[Chorus]\n...",
@@ -107,6 +135,15 @@ curl -s -X POST "http://localhost:8005/lyrics/extract" \
   "source": "embedded", // or "transcription"
   "plain_lyrics": "Line 1\nLine 2\n...",
   "timed_lyrics_lrc": "[00:12.34] Line 1\n[00:16.78] Line 2", // null if transcribed
+  "genres": ["High-Energy Techno", "Ebm"],
+  "style_tags": ["driving bass", "female vocals"],
+  "style_prompt_raw": "High-energy Techno, EBM, driving bass, female vocals, NO SLOP",
+  "bpm": 123,
+  "content_rating": {
+    "rating": "clean",
+    "matched_categories": [],
+    "flagged_terms": []
+  },
   "notes": "..."
 }
 ```
@@ -121,6 +158,15 @@ curl -s -X POST "http://localhost:8005/lyrics/from-mp3" \
 {
   "plain_lyrics": "Line 1\nLine 2",
   "timed_lyrics_lrc": "[00:12.34] Line 1\n[00:16.78] Line 2",
+  "genres": ["High-Energy Techno", "Ebm"],
+  "style_tags": ["driving bass", "female vocals"],
+  "style_prompt_raw": "High-energy Techno, EBM, driving bass, female vocals, NO SLOP",
+  "bpm": 123,
+  "content_rating": {
+    "rating": "clean",
+    "matched_categories": [],
+    "flagged_terms": []
+  },
   "sources": { "uslt": true, "txxx_lyrics": false, "sylt": true },
   "notes": "Found embedded SYLT and USLT tags"
 }

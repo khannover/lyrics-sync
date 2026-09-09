@@ -23,10 +23,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # --- Stage 2: Runtime ---
 FROM python:3.11-slim
 
-# Install ONLY the runtime dependencies (ffmpeg and libsndfile1)
+# Install ONLY the runtime dependencies (ffmpeg, libsndfile1, libchromaprint-tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
+    libchromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

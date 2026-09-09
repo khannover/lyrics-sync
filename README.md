@@ -1,15 +1,16 @@
-# Lyrics Sync & Musical Profile Service
+# Lyrics Sync, Musical Profile & Safety Service
 
-A FastAPI-based microservice that synchronizes plain-text lyrics to MP3 audio files using **faster-whisper** for forced alignment and **DTW (Dynamic Time Warping)**, and extracts rich musical profiles (genres, style tags, BPM, key, energy) using a **3-tier cascade** without PyTorch.
+A FastAPI-based microservice that synchronizes plain-text lyrics to MP3 audio files using **faster-whisper** for forced alignment and **DTW (Dynamic Time Warping)**, extracts rich musical profiles (genres, style tags, BPM, key, energy) using a **3-tier cascade** without PyTorch, and provides automated **NSFW content filtering**, **Chromaprint copyright fingerprinting**, and **AI watermark & provenance detection**.
 
 ## Tech Stack
 - **FastAPI**: Web framework for the API.
 - **faster-whisper**: High-performance Whisper implementation for transcription and alignment.
 - **DTW (Dynamic Time Warping)**: Aligns user lyric tokens with Whisper word-level audio segments.
-- **librosa**: Fast acoustic feature extraction (BPM, RMS energy, spectral centroid, musical key).
+- **librosa**: Fast acoustic feature extraction (BPM, RMS energy, spectral centroid, musical key, ultrasonic rolloff).
+- **fpcalc (Chromaprint)**: Ultra-fast acoustic fingerprint generation for copyright identification and AcoustID matching.
 - **onnxruntime**: Zero-PyTorch CPU neural audio genre classification via Essentia Discogs-EffNet (~18MB).
 - **ffmpeg**: Audio normalization, format verification, and conversion.
-- **mutagen**: Reads and writes ID3 tags (SYLT synchronized lyrics, USLT unsynchronized lyrics, TXXX frames, TCON genre, TBPM).
+- **mutagen**: Reads and writes ID3 tags (SYLT synchronized lyrics, USLT unsynchronized lyrics, TXXX frames, TCON genre, TBPM, COMM/WOAS provenance).
 
 ---
 
@@ -76,6 +77,34 @@ The service provides a high-performance 3-tier cascade to extract genres, musica
    - Zero-PyTorch deep classifier using Essentia Discogs-EffNet (`genre_discogs400.onnx`, 18 MB, 400 Discogs genres) running on CPU via `onnxruntime`.
    - Pre-cached locally in `/app/models/` for 100% offline execution.
    - Automatically triggered when Tier 1 finds no genres, or explicitly forced via `force_neural=true`.
+
+---
+
+## Safety, Copyright Fingerprinting & AI Provenance
+
+The service includes three integrated safety, compliance, and provenance modules:
+
+1. **NSFW & Explicit Content Filter (< 5ms)**
+   - Regex-based lexical analysis targeting severe profanity, hate speech / slurs, explicit sexual content, and graphic violence.
+   - Outputs:
+     - `rating`: `"clean"`, `"mild"`, or `"explicit"`
+     - `matched_categories`: list of flagged categories
+     - `flagged_terms`: matched trigger keywords (for moderation review)
+   - Automatically evaluated on extracted ID3 lyrics and Whisper transcriptions.
+
+2. **Acoustic Copyright Fingerprint via Chromaprint / AcoustID (~50ms)**
+   - Invokes `fpcalc -json` directly on the audio file.
+   - Computes standard Chromaprint audio fingerprint string and exact duration in seconds.
+   - Ready for offline database lookup or AcoustID / MusicBrainz commercial registry querying.
+
+3. **AI Watermark & Provenance Detector (~100ms)**
+   - **ID3 Metadata Audit:** Scans `WOAS` (Suno URL), `COMM` (generator comment tags, e.g. `made with suno; id=...`), and prompt tags.
+   - **Ultrasonic Spectral Analysis:** Analyzes the 18–22.05 kHz band roll-off. AI audio engines commonly feature a sharp ~16 kHz brickwall filter where energy above 20 kHz drops below 0.05% of spectral energy.
+   - Outputs:
+     - `is_synthetic`: boolean flag
+     - `confidence`: confidence score (0.0 to 1.0)
+     - `detected_source`: `"suno"`, `"udio"`, `"generic_ai"`, or `"unknown"`
+     - `indicators`: detailed breakdown of metadata and acoustic markers
 
 ---
 
@@ -212,6 +241,11 @@ Smart lyrics extractor with musical tag detection. Extracts embedded lyrics from
   "style_tags": ["driving bass", "female vocals"],
   "style_prompt_raw": "High-energy Techno, EBM, driving bass, female vocals, NO SLOP",
   "bpm": 123,
+  "content_rating": {
+    "rating": "clean",
+    "matched_categories": [],
+    "flagged_terms": []
+  },
   "notes": "Found embedded SYLT and USLT tags"
 }
 ```
@@ -240,6 +274,11 @@ Fast extraction of existing embedded ID3 lyric tags (`USLT`, `TXXX:LYRICS`, `SYL
   "style_tags": ["driving bass", "female vocals"],
   "style_prompt_raw": "High-energy Techno, EBM, driving bass, female vocals, NO SLOP",
   "bpm": 123,
+  "content_rating": {
+    "rating": "clean",
+    "matched_categories": [],
+    "flagged_terms": []
+  },
   "sources": {
     "uslt": true,
     "txxx_lyrics": false,
@@ -260,13 +299,15 @@ curl -X POST "http://localhost:8005/lyrics/from-mp3" \
 ---
 
 ### 8. `POST /audio/analyze` (Multi-Tier Audio Profile Analysis)
-Comprehensive multi-tier acoustic and musical profile analysis combining instant metadata, signal features, and deep neural genre classification.
+Comprehensive multi-tier acoustic and musical profile analysis combining instant metadata, signal features, deep neural genre classification, copyright fingerprinting, and AI provenance detection.
 
 **Parameters (multipart/form-data):**
 - `mp3` (file, required): MP3 audio file.
 - `include_signal` (boolean, optional, default: `true`): Extract acoustic signal features (BPM, key, energy) via `librosa`.
 - `force_neural` (boolean, optional, default: `false`): Always run Tier 3 ONNX neural classifier even if ID3 tags or style prompts exist.
 - `top_k_genres` (integer, optional, default: `5`): Number of neural genre predictions to return.
+- `include_fingerprint` (boolean, optional, default: `true`): Generate Chromaprint / AcoustID copyright fingerprint.
+- `include_ai_provenance` (boolean, optional, default: `true`): Detect Suno/Udio/AI watermark and spectral artifacts.
 
 **JSON Response:**
 ```json
@@ -286,6 +327,29 @@ Comprehensive multi-tier acoustic and musical profile analysis combining instant
   "bpm": 123,
   "key": "B minor",
   "energy": "high",
+  "content_rating": {
+    "rating": "clean",
+    "matched_categories": [],
+    "flagged_terms": []
+  },
+  "copyright_fingerprint": {
+    "fingerprint": "AQAAZEqSpEkSRYmSZUkU...",
+    "duration_sec": 182.62,
+    "algorithm": "chromaprint"
+  },
+  "ai_provenance": {
+    "is_synthetic": true,
+    "confidence": 0.99,
+    "detected_source": "suno",
+    "indicators": {
+      "has_suno_url": true,
+      "has_suno_comment": true,
+      "has_style_prompt": true,
+      "has_synthetic_brickwall": true,
+      "spectral_rolloff_hz": 16345.2,
+      "ultrasonic_ratio": 0.0001
+    }
+  },
   "lyrics": {
     "has_embedded": true,
     "plain_lyrics": "[Chorus]\n...",
