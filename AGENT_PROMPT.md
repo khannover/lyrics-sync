@@ -1,4 +1,4 @@
-﻿# Lyrics Sync Service — Agent & MCP Integration Prompt
+# Lyrics Sync Service — Agent & MCP Integration Prompt
 
 Copy and paste this prompt into your agent's system prompt, `.cursorrules`, `.windsurfrules`, custom instructions, or MCP client configuration to teach your agent how to use the Lyrics Sync Service.
 
@@ -8,7 +8,7 @@ Copy and paste this prompt into your agent's system prompt, `.cursorrules`, `.wi
 ## Service Role & Capabilities: Lyrics Sync Service
 
 You have access to a local or remote **Lyrics Sync Service** (default: `http://localhost:8005`, production: `https://lyricsync.bancamp.de`).
-The service synchronizes plain-text lyrics with MP3 audio files using **faster-whisper** (forced alignment) and **Dynamic Time Warping (DTW)**, manages ID3 metadata (SYLT synchronized lyrics frames and USLT unsynchronized frames), and provides AI audio transcription and tag extraction.
+The service synchronizes plain-text lyrics with MP3 audio files using **faster-whisper** (forced alignment) and **Dynamic Time Warping (DTW)**, manages ID3 metadata (SYLT synchronized lyrics frames, USLT, TCON, TBPM), and provides **multi-tier musical profile & genre analysis** (ID3 + AI prompts, acoustic BPM/key/energy via librosa, and zero-PyTorch neural classification via ONNX-runtime).
 
 ### Base URL Configuration
 - Local instance: `http://localhost:8005`
@@ -20,15 +20,24 @@ Always use the configured base URL when issuing requests.
 
 ### Decision Matrix: Which Endpoint Should You Call?
 
-1. **You want to get lyrics from an MP3 file (smart fallback):**
+1. **You want to extract musical profile, genres, BPM, key, and energy from an MP3:**
+   → Use `POST /audio/analyze`
+   - Runs a 3-tier cascade:
+     1. Instant ID3 tags (`TCON`, `TBPM`) + Suno/Udio prompt parsing (`[Style: ...]`).
+     2. Acoustic signal extraction (exact BPM, energy: `low`/`medium`/`high`, musical key: `B minor`).
+     3. Neural genre classification via Discogs-EffNet ONNX model (runs in < 150ms on CPU).
+   - Fast, offline, zero-PyTorch. Use `force_neural=true` to force deep neural classification even if tags exist.
+
+2. **You want to get lyrics from an MP3 file (smart fallback + style tags):**
    → Use `POST /lyrics/extract`
-   - Checks for existing embedded tags (`USLT`, `TXXX:LYRICS`, `SYLT`).
+   - Checks for existing embedded tags (`USLT`, `TXXX:LYRICS`, `SYLT`), genres, and style prompt preambles.
+   - Automatically strips prompt preambles (`[Style: ...]`) from plain lyrics.
    - If tags exist, extracts and returns them immediately without AI overhead.
    - If no embedded lyrics exist, automatically runs Whisper transcription on the audio and returns the transcribed text.
 
-2. **You ONLY want to read existing embedded ID3 tags from an MP3 (no Whisper):**
+3. **You ONLY want to read existing embedded ID3 tags from an MP3 (no Whisper):**
    → Use `POST /lyrics/from-mp3`
-   - Fast, zero Whisper GPU/CPU cost. Returns plain lyrics, LRC timed lyrics, and source flags.
+   - Fast, zero Whisper GPU/CPU cost. Returns plain lyrics (preambles stripped), LRC timed lyrics, normalized genres, style tags, and source flags.
 
 3. **You have an MP3 and plain lyrics, and want both a synced MP3 and an LRC file:**
    → Use `POST /sync`
@@ -59,7 +68,35 @@ Always use the configured base URL when issuing requests.
 
 ### Endpoint Reference & cURL Recipes
 
-#### 1. Extract or Transcribe Lyrics (Smart)
+#### 1. Analyze Musical Profile & Genres (Multi-Tier Cascade)
+```bash
+curl -s -X POST "http://localhost:8005/audio/analyze" \
+  -F "mp3=@/path/to/track.mp3"
+```
+**JSON Response:**
+```json
+{
+  "primary_genre": "High-Energy Techno",
+  "genres": ["High-Energy Techno", "Ebm"],
+  "style_tags": ["driving bass", "female vocals"],
+  "style_prompt_raw": "High-energy Techno, EBM, driving bass, female vocals, NO SLOP",
+  "bpm": 123,
+  "key": "B minor",
+  "energy": "high",
+  "lyrics": {
+    "has_embedded": true,
+    "plain_lyrics": "[Chorus]\n...",
+    "timed_lyrics_lrc": null
+  },
+  "tier_breakdown": {
+    "tier1_metadata": { "genres": ["High-Energy Techno", "Ebm"], "id3_bpm": null },
+    "tier2_signal": { "bpm": 123, "energy": "high", "key": "B minor" },
+    "tier3_neural": { "ran": false, "top_genres": [] }
+  }
+}
+```
+
+#### 2. Extract or Transcribe Lyrics (Smart)
 ```bash
 curl -s -X POST "http://localhost:8005/lyrics/extract" \
   -F "mp3=@/path/to/track.mp3"
@@ -74,7 +111,7 @@ curl -s -X POST "http://localhost:8005/lyrics/extract" \
 }
 ```
 
-#### 2. Extract Embedded Lyrics Only
+#### 3. Extract Embedded Lyrics Only
 ```bash
 curl -s -X POST "http://localhost:8005/lyrics/from-mp3" \
   -F "mp3=@/path/to/track.mp3"
@@ -89,7 +126,7 @@ curl -s -X POST "http://localhost:8005/lyrics/from-mp3" \
 }
 ```
 
-#### 3. Synchronize Lyrics (Download ZIP)
+#### 4. Synchronize Lyrics (Download ZIP)
 ```bash
 curl -s -X POST "http://localhost:8005/sync" \
   -F "mp3=@/path/to/track.mp3" \
@@ -101,7 +138,7 @@ curl -s -X POST "http://localhost:8005/sync" \
 - `"overwrite"` (default): Replaces existing SYLT and USLT/TXXX frames with timestamped LRC text.
 - `"sylt_only"`: Adds/updates only the synchronized SYLT frame, leaving existing plain USLT/TXXX lyrics untouched.
 
-#### 4. Synchronize Lyrics (Download MP3 Only)
+#### 5. Synchronize Lyrics (Download MP3 Only)
 ```bash
 curl -s -X POST "http://localhost:8005/sync/mp3-only" \
   -F "mp3=@/path/to/track.mp3" \
@@ -110,7 +147,7 @@ curl -s -X POST "http://localhost:8005/sync/mp3-only" \
   --output "track_synced.mp3"
 ```
 
-#### 5. Enqueue Async Job
+#### 6. Enqueue Async Job
 ```bash
 curl -s -X POST "http://localhost:8005/sync/jobs" \
   -F "mp3=@/path/to/track.mp3" \
@@ -135,7 +172,7 @@ curl -s -X POST "http://localhost:8005/sync/jobs" \
 ```
 If `LYRIC_SYNC_CALLBACK_SECRET` is configured on the server, verify the `X-Lyrics-Sync-Token` request header.
 
-#### 6. Check Job Status & Acknowledge
+#### 7. Check Job Status & Acknowledge
 ```bash
 # Poll status
 curl -s "http://localhost:8005/sync/jobs/{job_id}"
@@ -144,7 +181,7 @@ curl -s "http://localhost:8005/sync/jobs/{job_id}"
 curl -s -X POST "http://localhost:8005/sync/jobs/{job_id}/ack"
 ```
 
-#### 7. Queue & Health Monitoring
+#### 8. Queue & Health Monitoring
 ```bash
 # Check queue
 curl -s "http://localhost:8005/queue"

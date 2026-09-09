@@ -118,7 +118,13 @@ class TestExtractLyricsFromMp3:
             result = extract_lyrics_from_mp3(path)
         assert result["plain_lyrics"] is None
         assert result["timed_lyrics_lrc"] is None
-        assert result["sources"] == {"uslt": False, "txxx_lyrics": False, "sylt": False}
+        assert result["sources"] == {
+            "uslt": False,
+            "txxx_lyrics": False,
+            "sylt": False,
+            "tcon": False,
+            "tbpm": False,
+        }
 
     def test_uslt_timed_extracted(self):
         lrc_text = "[00:01.00]Line one\n[00:05.00]Line two"
@@ -228,4 +234,10 @@ class TestExtractLyricsFromMp3:
 
             result = extract_lyrics_from_mp3(path)
 
-        assert result["sources"] == {"uslt": True, "txxx_lyrics": True, "sylt": True}
+        assert result["sources"] == {
+            "uslt": True,
+            "txxx_lyrics": True,
+            "sylt": True,
+            "tcon": False,
+            "tbpm": False,
+        }

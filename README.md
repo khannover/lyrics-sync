@@ -1,13 +1,15 @@
-﻿# Lyrics Sync Service
+# Lyrics Sync & Musical Profile Service
 
-A FastAPI-based service that synchronizes plain-text lyrics to MP3 audio files using **faster-whisper** for forced alignment and **DTW (Dynamic Time Warping)** for timing refinement.
+A FastAPI-based microservice that synchronizes plain-text lyrics to MP3 audio files using **faster-whisper** for forced alignment and **DTW (Dynamic Time Warping)**, and extracts rich musical profiles (genres, style tags, BPM, key, energy) using a **3-tier cascade** without PyTorch.
 
 ## Tech Stack
 - **FastAPI**: Web framework for the API.
 - **faster-whisper**: High-performance Whisper implementation for transcription and alignment.
 - **DTW (Dynamic Time Warping)**: Aligns user lyric tokens with Whisper word-level audio segments.
+- **librosa**: Fast acoustic feature extraction (BPM, RMS energy, spectral centroid, musical key).
+- **onnxruntime**: Zero-PyTorch CPU neural audio genre classification via Essentia Discogs-EffNet (~18MB).
 - **ffmpeg**: Audio normalization, format verification, and conversion.
-- **mutagen**: Reads and writes ID3 tags (SYLT synchronized lyrics, USLT unsynchronized lyrics, and TXXX frames).
+- **mutagen**: Reads and writes ID3 tags (SYLT synchronized lyrics, USLT unsynchronized lyrics, TXXX frames, TCON genre, TBPM).
 
 ---
 
@@ -55,6 +57,25 @@ Paths intercepted and tarpitted include:
 - Suspicious probe queries (e.g., `?XDEBUG_SESSION_START=...`)
 
 Legitimate traffic (browsers with standard user agents, API clients, and `python-httpx`) flows straight through to the FastAPI application.
+
+---
+
+## Multi-Tier Musical Profile & Genre Cascade
+
+The service provides a high-performance 3-tier cascade to extract genres, musical tags, and audio profiles from any MP3:
+
+1. **Tier 1 (Instant — 0ms): ID3 Metadata & AI Prompt Parsing**
+   - Reads standard ID3 tags: `TCON` (genre list), `TBPM` (beats per minute), and lyrics frames (`USLT`, `TXXX`, `SYLT`).
+   - Parses Suno/Udio/AI style preambles (e.g. `[Style: High-energy Techno, EBM, driving bass, female vocals]`).
+   - Extracts normalized genres (`High-Energy Techno`, `Ebm`), descriptive style tags (`driving bass`, `female vocals`), strips noise tokens (`NO SLOP`), and strips prompt preambles from lyrics so Whisper alignment is never distorted.
+2. **Tier 2 (Signal — ~0.3s): Acoustic Signal Features via `librosa`**
+   - **BPM Detection:** Exact onset envelope tempo tracking.
+   - **Energy Level:** Classified as `low`, `medium`, or `high` based on RMS loudness and spectral centroid brightness.
+   - **Musical Key & Scale:** Fast STFT chromagram analysis correlated against Krumhansl-Schmuckler tonality profiles (e.g., `B minor`, `D major`).
+3. **Tier 3 (Neural — ~0.1s on CPU): Deep Audio Genre Classification via ONNX-Runtime**
+   - Zero-PyTorch deep classifier using Essentia Discogs-EffNet (`genre_discogs400.onnx`, 18 MB, 400 Discogs genres) running on CPU via `onnxruntime`.
+   - Pre-cached locally in `/app/models/` for 100% offline execution.
+   - Automatically triggered when Tier 1 finds no genres, or explicitly forced via `force_neural=true`.
 
 ---
 
@@ -176,7 +197,7 @@ curl -X POST "http://localhost:8005/sync/jobs/8bb38cb5-.../ack"
 ---
 
 ### 6. `POST /lyrics/extract`
-Smart lyrics extractor. Extracts embedded lyrics from ID3 tags, or automatically transcribes the audio using faster-whisper if no embedded lyrics are found.
+Smart lyrics extractor with musical tag detection. Extracts embedded lyrics from ID3 tags, or automatically transcribes the audio using faster-whisper if no embedded lyrics are found. Automatically strips AI style preambles from lyrics and parses genre tags.
 
 **Parameters (multipart/form-data):**
 - `mp3` (file, required): MP3 audio file.
@@ -187,6 +208,10 @@ Smart lyrics extractor. Extracts embedded lyrics from ID3 tags, or automatically
   "source": "embedded",
   "plain_lyrics": "First line\nSecond line",
   "timed_lyrics_lrc": "[00:12.34] First line\n[00:16.78] Second line",
+  "genres": ["High-Energy Techno", "Ebm"],
+  "style_tags": ["driving bass", "female vocals"],
+  "style_prompt_raw": "High-energy Techno, EBM, driving bass, female vocals, NO SLOP",
+  "bpm": 123,
   "notes": "Found embedded SYLT and USLT tags"
 }
 ```
@@ -201,7 +226,7 @@ curl -X POST "http://localhost:8005/lyrics/extract" \
 ---
 
 ### 7. `POST /lyrics/from-mp3`
-Fast extraction of existing embedded ID3 lyric tags (`USLT`, `TXXX:LYRICS`, `SYLT`). Does **not** run Whisper AI transcription.
+Fast extraction of existing embedded ID3 lyric tags (`USLT`, `TXXX:LYRICS`, `SYLT`), `TCON` genres, `TBPM`, and Suno/Udio style preambles. Does **not** run Whisper AI transcription.
 
 **Parameters (multipart/form-data):**
 - `mp3` (file, required): MP3 audio file.
@@ -211,10 +236,16 @@ Fast extraction of existing embedded ID3 lyric tags (`USLT`, `TXXX:LYRICS`, `SYL
 {
   "plain_lyrics": "Lyrics text...",
   "timed_lyrics_lrc": "[00:10.50] Lyrics line...",
+  "genres": ["High-Energy Techno", "Ebm"],
+  "style_tags": ["driving bass", "female vocals"],
+  "style_prompt_raw": "High-energy Techno, EBM, driving bass, female vocals, NO SLOP",
+  "bpm": 123,
   "sources": {
     "uslt": true,
     "txxx_lyrics": false,
-    "sylt": true
+    "sylt": true,
+    "tcon": false,
+    "tbpm": false
   },
   "notes": null
 }
@@ -228,7 +259,79 @@ curl -X POST "http://localhost:8005/lyrics/from-mp3" \
 
 ---
 
-### 8. `GET /queue`
+### 8. `POST /audio/analyze` (Multi-Tier Audio Profile Analysis)
+Comprehensive multi-tier acoustic and musical profile analysis combining instant metadata, signal features, and deep neural genre classification.
+
+**Parameters (multipart/form-data):**
+- `mp3` (file, required): MP3 audio file.
+- `include_signal` (boolean, optional, default: `true`): Extract acoustic signal features (BPM, key, energy) via `librosa`.
+- `force_neural` (boolean, optional, default: `false`): Always run Tier 3 ONNX neural classifier even if ID3 tags or style prompts exist.
+- `top_k_genres` (integer, optional, default: `5`): Number of neural genre predictions to return.
+
+**JSON Response:**
+```json
+{
+  "primary_genre": "High-Energy Techno",
+  "genres": [
+    "High-Energy Techno",
+    "Ebm"
+  ],
+  "style_tags": [
+    "High-energy Techno",
+    "EBM",
+    "driving bass",
+    "female vocals"
+  ],
+  "style_prompt_raw": "High-energy Techno, EBM, driving bass, female vocals, NO SLOP",
+  "bpm": 123,
+  "key": "B minor",
+  "energy": "high",
+  "lyrics": {
+    "has_embedded": true,
+    "plain_lyrics": "[Chorus]\n...",
+    "timed_lyrics_lrc": null
+  },
+  "tier_breakdown": {
+    "tier1_metadata": {
+      "sources": { "uslt": true, "txxx_lyrics": false, "sylt": false, "tcon": false, "tbpm": false },
+      "genres": ["High-Energy Techno", "Ebm"],
+      "id3_bpm": null,
+      "notes": "USLT frame contains plain text."
+    },
+    "tier2_signal": {
+      "bpm": 123,
+      "energy": "high",
+      "key": "B minor",
+      "rms": 0.1755,
+      "spectral_centroid": 3142.3,
+      "analysis_time_sec": 0.28
+    },
+    "tier3_neural": {
+      "ran": false,
+      "primary_genre": null,
+      "top_genres": [],
+      "inference_time_sec": 0.0
+    }
+  },
+  "total_time_sec": 0.285
+}
+```
+
+**Example:**
+```bash
+# Standard analysis (auto-cascade: runs Tier 3 only if needed)
+curl -X POST "http://localhost:8005/audio/analyze" \
+  -F "mp3=@song.mp3"
+
+# Force neural genre classification
+curl -X POST "http://localhost:8005/audio/analyze" \
+  -F "mp3=@song.mp3" \
+  -F "force_neural=true"
+```
+
+---
+
+### 9. `GET /queue`
 Returns current concurrency semaphore and background job counts.
 
 **JSON Response:**

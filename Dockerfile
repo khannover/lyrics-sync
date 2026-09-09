@@ -37,14 +37,16 @@ COPY --from=builder /opt/venv /opt/venv
 # Ensure the app uses the virtual environment
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy the application code
+# Copy the application code and models
 COPY app/ ./app/
 RUN mkdir -p /app/models
+COPY models/ /app/models/
 
-# Pre-download model at build time
+# Pre-download models at build time
 ARG MODEL_SIZE=small
 ENV MODEL_SIZE=${MODEL_SIZE}
 RUN python -c "from app.alignment import ensure_model; ensure_model()"
+RUN python -c "from app.genre_classifier import ensure_genre_model; ensure_genre_model()"
 
 EXPOSE 8000
 

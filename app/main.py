@@ -33,7 +33,8 @@ from app.async_jobs import (
     stop_worker,
 )
 from app.sylt_writer import write_sylt_tag, write_lrc_file
-from app.lyrics_tag_reader import extract_lyrics_from_mp3
+from app.lyrics_tag_reader import extract_lyrics_from_mp3, strip_style_preamble
+from app.audio_analyzer import analyze_audio_profile
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,9 @@ async def _run_alignment(
     job_dir: Path,
 ) -> AlignmentResult:
     global waiting_jobs, alignment_active
+    lyrics_text, prompt_found = strip_style_preamble(lyrics_text)
+    if prompt_found:
+        _job_log(job_id, "stage=stripped_style_prompt", prompt=prompt_found)
     line_count = len([line for line in lyrics_text.splitlines() if line.strip()])
     _job_log(
         job_id,
@@ -789,6 +793,10 @@ async def extract_or_transcribe_lyrics(
                 "source": "embedded",
                 "plain_lyrics": tag_result.get("plain_lyrics"),
                 "timed_lyrics_lrc": tag_result.get("timed_lyrics_lrc"),
+                "genres": tag_result.get("genres", []),
+                "style_tags": tag_result.get("style_tags", []),
+                "style_prompt_raw": tag_result.get("style_prompt_raw"),
+                "bpm": tag_result.get("bpm"),
                 "notes": tag_result.get("notes"),
             }
 
@@ -813,6 +821,10 @@ async def extract_or_transcribe_lyrics(
             "source": "transcription",
             "plain_lyrics": transcribed_text,
             "timed_lyrics_lrc": None,
+            "genres": tag_result.get("genres", []),
+            "style_tags": tag_result.get("style_tags", []),
+            "style_prompt_raw": tag_result.get("style_prompt_raw"),
+            "bpm": tag_result.get("bpm"),
             "notes": "Lyrics transcribed from audio using AI.",
         }
 
@@ -824,6 +836,71 @@ async def extract_or_transcribe_lyrics(
     finally:
         _unregister_job(job_id)
         shutil.rmtree(job_dir, ignore_errors=True)
+
+
+@app.post(
+    "/audio/analyze",
+    summary="Multi-tier audio analysis: metadata, acoustic features, and neural genre classification",
+)
+@limiter.limit(SYNC_RATE_LIMIT)
+async def analyze_audio(
+    request: Request,
+    mp3: UploadFile = File(..., description="MP3 audio file"),
+    include_signal: bool = Form(default=True, description="Extract acoustic signal features (BPM, key, energy)"),
+    force_neural: bool = Form(default=False, description="Always run Tier 3 ONNX neural genre classifier"),
+    top_k_genres: int = Form(default=5, description="Number of top neural genre predictions"),
+):
+    if not mp3.filename.lower().endswith(".mp3"):
+        raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
+
+    job_id = str(uuid.uuid4())
+    job_dir = WORK_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    request_started = time.monotonic()
+    client_ip = _get_client_ip(request)
+
+    try:
+        _job_log(
+            job_id,
+            "stage=request_start",
+            endpoint="/audio/analyze",
+            client=client_ip,
+            file=mp3.filename,
+        )
+
+        mp3_path = job_dir / "input.mp3"
+        with open(mp3_path, "wb") as f:
+            shutil.copyfileobj(mp3.file, f)
+
+        if mp3_path.stat().st_size == 0:
+            raise HTTPException(status_code=400, detail="Uploaded MP3 file is empty.")
+
+        result = await asyncio.to_thread(
+            analyze_audio_profile,
+            str(mp3_path),
+            include_signal=include_signal,
+            force_neural=force_neural,
+            top_k_genres=top_k_genres,
+        )
+
+        _job_log(
+            job_id,
+            "stage=request_done",
+            endpoint="/audio/analyze",
+            file=mp3.filename,
+            elapsed=f"{time.monotonic() - request_started:.1f}s",
+            primary_genre=result.get("primary_genre"),
+            bpm=result.get("bpm"),
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[audio] job=%s stage=request_failed", job_id)
+        raise HTTPException(status_code=500, detail=f"Audio analysis failed: {e}")
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
 
 
 

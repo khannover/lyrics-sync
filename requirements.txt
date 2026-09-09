@@ -9,3 +9,4 @@ faster-whisper==1.1.0
 dtw-python==1.5.3
 slowapi==0.1.9
 httpx==0.28.1
+onnxruntime==1.28.0
