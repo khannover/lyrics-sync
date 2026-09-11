@@ -1,0 +1,1178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KAI | Lyric Sync Console</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap');
+
+        :root {
+            --bg: #040b12;
+            --bg-2: #07111c;
+            --panel: rgba(6, 18, 31, 0.92);
+            --panel-soft: rgba(10, 24, 40, 0.78);
+            --border: rgba(74, 122, 173, 0.38);
+            --text: #d7e5f4;
+            --muted: #85a1bc;
+            --accent: #36c1ff;
+            --accent-2: #ff9a3d;
+            --active: #7fe0ff;
+            --shell-width: min(1500px, 98vw);
+        }
+
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+
+        body {
+            margin: 0;
+            color: var(--text);
+            font-family: 'IBM Plex Mono', monospace;
+            background:
+                radial-gradient(1000px 540px at 10% -15%, rgba(54, 193, 255, 0.16), transparent 60%),
+                radial-gradient(1000px 540px at 100% 0%, rgba(255, 154, 61, 0.13), transparent 65%),
+                linear-gradient(165deg, var(--bg), var(--bg-2));
+            display: grid;
+            grid-template-rows: auto 1fr;
+            overflow: hidden;
+            position: relative;
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background: repeating-linear-gradient(
+                to bottom,
+                rgba(255, 255, 255, 0.02) 0,
+                rgba(255, 255, 255, 0.02) 1px,
+                transparent 2px,
+                transparent 4px
+            );
+            opacity: 0.17;
+            mix-blend-mode: soft-light;
+        }
+
+        .masthead {
+            width: var(--shell-width);
+            margin: 12px auto 10px;
+            padding: 12px 16px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: rgba(4, 14, 24, 0.76);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            backdrop-filter: blur(7px);
+        }
+
+        .brand {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--accent);
+            font-size: 1.02rem;
+        }
+
+        .subtitle {
+            color: var(--muted);
+            font-size: 0.78rem;
+        }
+
+        .app-shell {
+            width: var(--shell-width);
+            margin: 0 auto 12px;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(360px, 460px) 1fr;
+            gap: 14px;
+        }
+
+        .control-panel,
+        .viewer-panel {
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            background: var(--panel);
+            box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
+            min-height: 0;
+        }
+
+        .control-panel {
+            display: flex;
+            flex-direction: column;
+            padding: 14px;
+            overflow: auto;
+            gap: 12px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+            padding: 4px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .tab {
+            flex: 1;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            padding: 8px 10px;
+            color: var(--muted);
+            font-size: 0.74rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            cursor: pointer;
+            transition: 180ms ease;
+        }
+
+        .tab:hover { color: var(--text); border-color: rgba(127, 224, 255, 0.4); }
+
+        .tab.active {
+            color: #001422;
+            background: linear-gradient(135deg, var(--active), var(--accent));
+            border-color: transparent;
+            font-weight: 700;
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;            
+            margin-top: 50px;
+
+        }
+
+        .control-group {
+            border: 1px solid rgba(124, 171, 221, 0.24);
+            border-radius: 12px;
+            background: var(--panel-soft);
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        label {
+            color: var(--accent-2);
+            font-size: 0.73rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            font-weight: 700;
+        }
+
+        input[type="file"], textarea {
+            width: 100%;
+            border: 1px solid rgba(124, 171, 221, 0.3);
+            border-radius: 10px;
+            background: #020914;
+            color: var(--text);
+            padding: 10px;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.88rem;
+        }
+
+        input[type="file"]::file-selector-button {
+            border: 1px solid rgba(127, 224, 255, 0.42);
+            border-radius: 6px;
+            padding: 6px 10px;
+            margin-right: 10px;
+            color: #051624;
+            background: linear-gradient(135deg, var(--active), var(--accent));
+            font-family: 'IBM Plex Mono', monospace;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        textarea { min-height: 120px; resize: vertical; }
+        .lyrics-textarea { min-height: 120px; }
+        .hidden { display: none; }
+
+        .choice-row {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .choice-row label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0;
+            color: var(--muted);
+            text-transform: none;
+            letter-spacing: 0;
+            font-size: 0.96rem;
+            border: 1px solid rgba(124, 171, 221, 0.3);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.04);
+            padding: 9px 10px;
+            cursor: pointer;
+            transition: 160ms ease;
+        }
+
+        .choice-row label:hover {
+            border-color: rgba(127, 224, 255, 0.5);
+            background: rgba(74, 122, 173, 0.22);
+        }
+
+        .choice-row input[type="radio"] {
+            accent-color: var(--accent-2);
+            width: 16px;
+            height: 16px;
+        }
+
+        .embed-note {
+            font-size: 0.78rem;
+            color: var(--muted);
+            line-height: 1.4;
+        }
+
+        .manual-tools {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .manual-tools-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .manual-btn {
+            border: 1px solid rgba(124, 171, 221, 0.36);
+            border-radius: 9px;
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.78rem;
+            letter-spacing: 0.02em;
+            padding: 8px 10px;
+            cursor: pointer;
+            transition: 160ms ease;
+        }
+
+        .result-panel {
+            border: 1px solid rgba(124, 171, 221, 0.24);
+            border-radius: 12px;
+            background: rgba(2, 9, 20, 0.62);
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .result-panel.hidden {
+            display: none;
+        }
+
+        .result-actions {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 8px;
+        }
+
+        .result-actions .manual-btn {
+            min-width: 0;
+            flex: 1;
+        }
+
+        .result-panel.ready {
+            border-color: rgba(127, 224, 255, 0.56);
+            background: rgba(54, 193, 255, 0.1);
+            box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.2) inset, 0 0 20px rgba(54, 193, 255, 0.16);
+            animation: result-ready-pulse 1.4s ease-in-out 2;
+        }
+
+        .result-panel.ready label::after {
+            content: '  READY';
+            color: #9fffd0;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            font-size: 0.72rem;
+        }
+
+        @keyframes result-ready-pulse {
+            0% { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.1) inset, 0 0 0 rgba(54, 193, 255, 0.0); }
+            50% { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.3) inset, 0 0 24px rgba(54, 193, 255, 0.22); }
+            100% { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.2) inset, 0 0 20px rgba(54, 193, 255, 0.16); }
+        }
+
+        @media (max-width: 520px) {
+            .result-actions {
+                flex-direction: row;
+            }
+
+            .result-actions .manual-btn {
+                font-size: 0.7rem;
+                padding: 8px 6px;
+            }
+        }
+
+        .manual-btn:hover {
+            border-color: rgba(127, 224, 255, 0.52);
+            background: rgba(54, 193, 255, 0.12);
+        }
+
+        .manual-tools-note {
+            font-size: 0.74rem;
+            color: var(--muted);
+            line-height: 1.4;
+        }
+
+        .manual-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text);
+            font-size: 0.78rem;
+            padding: 6px 0 2px;
+        }
+
+        .manual-toggle input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent);
+        }
+
+        .sync-note {
+            border: 1px solid rgba(255, 154, 61, 0.34);
+            border-left: 4px solid var(--accent-2);
+            border-radius: 10px;
+            background: rgba(255, 154, 61, 0.08);
+            color: #ffd3b0;
+            font-size: 0.78rem;
+            line-height: 1.45;
+            padding: 10px;
+            transition: 180ms ease;
+        }
+
+        .sync-note.busy {
+            border-color: rgba(127, 224, 255, 0.4);
+            border-left-color: var(--accent);
+            background: rgba(54, 193, 255, 0.1);
+            color: #d9f4ff;
+            box-shadow: 0 0 0 1px rgba(54, 193, 255, 0.12) inset;
+            animation: sync-note-pulse 1.25s ease-in-out infinite;
+        }
+
+        .sync-note.busy::after {
+            content: ' ...';
+            display: inline-block;
+            width: 1.6em;
+            overflow: hidden;
+            vertical-align: bottom;
+            animation: sync-note-dots 1s steps(4, end) infinite;
+        }
+
+        @keyframes sync-note-pulse {
+            0% {
+                box-shadow: 0 0 0 1px rgba(54, 193, 255, 0.12) inset, 0 0 0 rgba(54, 193, 255, 0.0);
+            }
+            50% {
+                box-shadow: 0 0 0 1px rgba(54, 193, 255, 0.2) inset, 0 0 16px rgba(54, 193, 255, 0.18);
+            }
+            100% {
+                box-shadow: 0 0 0 1px rgba(54, 193, 255, 0.12) inset, 0 0 0 rgba(54, 193, 255, 0.0);
+            }
+        }
+
+        @keyframes sync-note-dots {
+            0% { width: 0; }
+            100% { width: 1.6em; }
+        }
+
+        #btn-sync {
+            border: none;
+            border-radius: 10px;
+            min-height: 48px;
+            background: linear-gradient(135deg, var(--accent-2), #ff6d1f);
+            color: #201205;
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            font-size: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.09em;
+            cursor: pointer;
+            box-shadow: 0 12px 28px rgba(255, 109, 31, 0.25);
+            transition: 180ms ease;
+        }
+
+        #btn-sync:hover { transform: translateY(-1px); filter: brightness(1.05); }
+        #btn-sync:disabled {
+            background: #33455b;
+            color: #89a0ba;
+            cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
+            filter: none;
+        }
+
+        #embedded-lyrics-wrap {
+            border: 1px solid rgba(124, 171, 221, 0.24);
+            border-radius: 12px;
+            background: rgba(2, 9, 20, 0.65);
+            padding: 10px;
+        }
+
+        .embed-status {
+            color: var(--muted);
+            font-size: 0.83rem;
+            margin-bottom: 6px;
+        }
+
+        .embedded-lyrics-panel {
+            border: 1px solid rgba(124, 171, 221, 0.24);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 10px;
+        }
+
+        .embedded-lyrics-panel summary {
+            color: var(--accent);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .embedded-lyrics-panel textarea {
+            min-height: 90px;
+            margin-top: 8px;
+        }
+
+        .viewer-panel {
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            overflow: hidden;
+        }
+
+        .status-bar {
+            margin: 12px 12px 0;
+            padding: 10px 12px;
+            border: 1px solid rgba(124, 171, 221, 0.3);
+            border-radius: 10px;
+            background: rgba(3, 10, 19, 0.75);
+            color: var(--muted);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-height: 40px;
+            font-size: 0.85rem;
+        }
+
+        .status-bar.loading { color: var(--text); }
+
+        .status-bar .spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(124, 171, 221, 0.45);
+            border-top-color: var(--accent-2);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            display: none;
+        }
+
+        .status-bar.loading .spinner { display: inline-block; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        #lyrics-window {
+            margin: 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(124, 171, 221, 0.22);
+            background: rgba(2, 8, 16, 0.65);
+            overflow-y: auto;
+            text-align: center;
+            scroll-behavior: smooth;
+            mask-image: linear-gradient(transparent, black 18%, black 82%, transparent);
+            -webkit-mask-image: linear-gradient(transparent, black 18%, black 82%, transparent);
+        }
+
+        #lyrics-content { padding: 16vh 0; }
+
+        .lyric-line {
+            padding: 15px 16px;
+            font-size: clamp(1.02rem, 2.2vw, 1.7rem);
+            color: rgba(215, 229, 244, 0.3);
+            filter: blur(1.7px);
+            transform: scale(0.9);
+            transition: 260ms ease;
+            cursor: pointer;
+        }
+
+        .lyric-line:hover {
+            color: rgba(215, 229, 244, 0.6);
+            filter: blur(0.6px);
+        }
+
+        .active {
+            color: var(--accent-2) !important;
+            filter: blur(0) !important;
+            transform: scale(1.12) !important;
+            text-shadow: 0 0 14px rgba(255, 154, 61, 0.45);
+            font-weight: 700;
+        }
+
+        .player-container {
+            border-top: 1px solid rgba(124, 171, 221, 0.24);
+            background: rgba(4, 12, 22, 0.84);
+            padding: 10px 12px;
+            display: flex;
+            justify-content: center;
+        }
+
+        audio { width: min(960px, 98%); }
+
+        @media (max-width: 1080px) {
+            .app-shell {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto 1fr;
+            }
+
+            .control-panel { max-height: 50vh; }
+        }
+
+        @media (max-width: 720px) {
+            .masthead {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .tab { font-size: 0.68rem; }
+            .control-panel { padding: 10px; }
+            #lyrics-content { padding: 12vh 0; }
+        }
+    </style>
+</head>
+<body>
+    <header class="masthead">
+        <div class="brand">KAI LYRIC SYNC CONSOLE</div>
+        <div class="subtitle">Whisper alignment + ID3 embedding controls</div>
+    </header>
+
+    <main class="app-shell">
+        <section class="control-panel">
+            <div class="tabs">
+                <div class="tab active" data-tab="auto">Auto Sync API</div>
+                <div class="tab" data-tab="manual">Manual LRC Preview</div>
+            </div>
+
+            <div class="tab-content active" id="tab-auto">
+                <div class="control-group group-audio">
+                    <label>1. Select Audio (.mp3)</label>
+                    <input type="file" id="auto-audio" accept=".mp3,audio/mpeg">
+                </div>
+
+                <div class="control-group group-lyrics">
+                    <label>2. Lyrics Source</label>
+                    <div class="choice-row vertical">
+                        <label><input type="radio" name="lyrics-source" value="file" checked> Upload file</label>
+                        <label><input type="radio" name="lyrics-source" value="text"> Paste text</label>
+                    </div>
+                    <input type="file" id="auto-lyrics-file" accept=".txt,text/plain">
+                    <textarea id="auto-lyrics-text" class="lyrics-textarea hidden" placeholder="Paste lyrics here..."></textarea>
+                    <div class="sync-note" id="sync-note">
+                        Use lyrics that actually match what is sung in the generated audio. If extracted or pasted lyrics differ from the vocal, alignment quality will drop and timestamps may look wrong.
+                    </div>
+                </div>
+
+                <div class="control-group group-embed" id="embed-mode-group">
+                    <label>3. Embed Mode</label>
+                    <div class="choice-row vertical">
+                        <label title="Writes synced LRC text into USLT and TXXX:LYRICS (replaces plain lyrics)">
+                            <input type="radio" name="embed-mode" value="overwrite" checked> Overwrite lyrics tags
+                        </label>
+                        <label title="Writes only the SYLT frame and keeps existing plain lyrics intact">
+                            <input type="radio" name="embed-mode" value="sylt_only"> SYLT only (keep plain lyrics)
+                        </label>
+                    </div>
+                    <div class="embed-note">`overwrite` updates USLT + TXXX:LYRICS with synced content. `sylt_only` writes only SYLT and preserves plain text tags.</div>
+                </div>
+
+                <div class="control-group group-action">
+                    <label>4. Run</label>
+                    <button id="btn-sync" disabled>Sync Lyrics</button>
+                </div>
+
+                <div id="embedded-lyrics-wrap" class="hidden">
+                    <div class="embed-status" id="embed-status-text"></div>
+                    <details class="embedded-lyrics-panel" id="timed-lrc-panel">
+                        <summary>Timed Lyrics (LRC)</summary>
+                        <textarea id="embed-lrc-text" readonly></textarea>
+                    </details>
+                </div>
+
+                <div class="result-panel hidden" id="sync-result-panel">
+                    <label>Sync Result</label>
+                    <div class="result-actions">
+                        <button type="button" class="manual-btn" id="btn-sync-download" disabled>Download synced ZIP</button>
+                        <button type="button" class="manual-btn" id="btn-copy-timestamped" disabled>Copy timestamped lyrics</button>
+                    </div>
+                    <textarea id="timestamped-lyrics-output" class="lyrics-textarea" placeholder="Timestamped lyrics will appear here after sync..." readonly></textarea>
+                </div>
+            </div>
+
+            <div class="tab-content" id="tab-manual">
+                <div class="control-group">
+                    <label>1. Select Audio (.mp3)</label>
+                    <input type="file" id="manual-audio" accept=".mp3,audio/mpeg">
+                </div>
+                <div class="control-group">
+                    <label>2. Paste Sync Data (LRC text)</label>
+                    <textarea id="manual-lrc-text" class="lyrics-textarea" placeholder="Paste LRC content here..."></textarea>
+                </div>
+                <div class="control-group">
+                    <label>3. Manual Alignment Tools</label>
+                    <div class="manual-tools">
+                        <label class="manual-toggle">
+                            <input type="checkbox" id="manual-editing-mode">
+                            Editing Mode (no auto-play on line click, freeze timeline highlight)
+                        </label>
+                        <div class="manual-tools-row">
+                            <button type="button" class="manual-btn" id="btn-manual-set-current">Set selected line to current time</button>
+                            <button type="button" class="manual-btn" id="btn-manual-nudge-back">Nudge -100ms</button>
+                            <button type="button" class="manual-btn" id="btn-manual-nudge-forward">Nudge +100ms</button>
+                        </div>
+                        <div class="manual-tools-row">
+                            <button type="button" class="manual-btn" id="btn-manual-export">Download fixed LRC</button>
+                            <button type="button" class="manual-btn" id="btn-manual-use-input">Use my fixed timestamped lyrics as sync input</button>
+                        </div>
+                        <div class="manual-tools-note">Tip: click a lyric line in the preview to select it, then use Set/Nudge for precise manual timing.</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="viewer-panel">
+            <div class="status-bar" id="status-bar">
+                <div class="spinner"></div>
+                <span id="status-text">Ready - select files and click Sync.</span>
+            </div>
+
+            <div id="lyrics-window">
+                <div id="lyrics-content">
+                    <div class="lyric-line active">Waiting for files...</div>
+                    <div class="lyric-line">Upload an MP3 and lyrics to auto-sync, or load local files.</div>
+                </div>
+            </div>
+
+            <div class="player-container"><audio id="audio-player" controls></audio></div>
+        </section>
+    </main>
+
+    <script>
+        // ─── Elements ───
+        const player    = document.getElementById('audio-player');
+        const content   = document.getElementById('lyrics-content');
+        const windowEl  = document.getElementById('lyrics-window');
+        const statusBar = document.getElementById('status-bar');
+        const statusTxt = document.getElementById('status-text');
+        const btnSync   = document.getElementById('btn-sync');
+
+        const autoAudio   = document.getElementById('auto-audio');
+        const autoLyricsFile = document.getElementById('auto-lyrics-file');
+        const autoLyricsText = document.getElementById('auto-lyrics-text');
+        const lyricsSource = document.querySelectorAll('input[name="lyrics-source"]');
+        const manualAudio = document.getElementById('manual-audio');
+        const manualLrcText = document.getElementById('manual-lrc-text');
+        const btnManualSetCurrent = document.getElementById('btn-manual-set-current');
+        const btnManualNudgeBack = document.getElementById('btn-manual-nudge-back');
+        const btnManualNudgeForward = document.getElementById('btn-manual-nudge-forward');
+        const btnManualExport = document.getElementById('btn-manual-export');
+        const btnManualUseInput = document.getElementById('btn-manual-use-input');
+        const manualEditingModeToggle = document.getElementById('manual-editing-mode');
+        const syncResultPanel = document.getElementById('sync-result-panel');
+        const btnSyncDownload = document.getElementById('btn-sync-download');
+        const btnCopyTimestamped = document.getElementById('btn-copy-timestamped');
+        const timestampedLyricsOutput = document.getElementById('timestamped-lyrics-output');
+        const embeddedWrap = document.getElementById('embedded-lyrics-wrap');
+        const embedStatusText = document.getElementById('embed-status-text');
+        const timedLrcPanel = document.getElementById('timed-lrc-panel');
+        const embedLrcText = document.getElementById('embed-lrc-text');
+        const syncNote = document.getElementById('sync-note');
+
+        const syncNoteDefaultText = 'Use lyrics that actually match what is sung in the generated audio. If extracted or pasted lyrics differ from the vocal, alignment quality will drop and timestamps may look wrong.';
+
+        function setSyncNoteBusy(isBusy) {
+            if (!syncNote) return;
+            if (isBusy) {
+                syncNote.classList.add('busy');
+                syncNote.textContent = 'Sync service is running on the server. This can take a bit depending on audio length and load. Please wait.';
+            } else {
+                syncNote.classList.remove('busy');
+                syncNote.textContent = syncNoteDefaultText;
+            }
+        }
+
+        let syncMap = [];
+        let selectedLineIdx = -1;
+        let manualEditingMode = false;
+        let lastSyncZipBlob = null;
+        let lastSyncZipFileName = 'synced_result.zip';
+
+        function formatLrcTimestamp(ms) {
+            const safe = Math.max(0, Math.round(ms));
+            const minutes = Math.floor(safe / 60000);
+            const seconds = (safe % 60000) / 1000;
+            return `[${String(minutes).padStart(2, '0')}:${seconds.toFixed(2).padStart(5, '0')}]`;
+        }
+
+        function serializeSyncMapToLrc() {
+            return syncMap
+                .map(item => `${formatLrcTimestamp(item.time)}${item.text}`)
+                .join('\n');
+        }
+
+        function updateManualTextareaFromSyncMap() {
+            if (syncMap.length === 0) return;
+            manualLrcText.value = serializeSyncMapToLrc();
+        }
+
+        async function copyTextToClipboard(text) {
+            if (!text) return false;
+            try {
+                await navigator.clipboard.writeText(text);
+                return true;
+            } catch {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.focus();
+                ta.select();
+                const ok = document.execCommand('copy');
+                document.body.removeChild(ta);
+                return ok;
+            }
+        }
+
+        function renderSyncMapLines() {
+            content.innerHTML = '';
+            syncMap.forEach((item, i) => {
+                const div = document.createElement('div');
+                div.className = 'lyric-line';
+                div.id = `line-${i}`;
+                div.innerText = item.text;
+                // Click selects line and seeks.
+                div.addEventListener('click', () => {
+                    selectedLineIdx = i;
+                    player.currentTime = item.time / 1000;
+                    if (!manualEditingMode && player.paused) player.play();
+                });
+                content.appendChild(div);
+            });
+        }
+
+        manualEditingModeToggle?.addEventListener('change', () => {
+            manualEditingMode = !!manualEditingModeToggle.checked;
+            if (manualEditingMode) {
+                player.pause();
+                setStatus('Editing mode enabled. Playback auto-start is disabled.', false);
+            } else {
+                setStatus('Editing mode disabled.', false);
+            }
+        });
+
+        // ─── Tab switching ───
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+            });
+        });
+
+        // ─── Status helpers ───
+        function setStatus(msg, loading = false) {
+            statusTxt.textContent = msg;
+            statusBar.classList.toggle('loading', loading);
+        }
+
+        btnSyncDownload?.addEventListener('click', () => {
+            if (!lastSyncZipBlob) return;
+            offerDownload(lastSyncZipBlob, lastSyncZipFileName);
+            setStatus('Downloaded synced ZIP.', false);
+        });
+
+        btnCopyTimestamped?.addEventListener('click', async () => {
+            const text = timestampedLyricsOutput?.value?.trim();
+            if (!text) return;
+            const ok = await copyTextToClipboard(text);
+            setStatus(ok ? 'Timestamped lyrics copied to clipboard.' : 'Could not copy lyrics automatically.', false);
+        });
+
+        // ─── Enable sync button when both files selected ───
+        let lyricsMode = 'file';
+
+        function checkAutoReady() {
+            const hasLyrics = lyricsMode === 'file'
+                ? autoLyricsFile.files.length > 0
+                : autoLyricsText.value.trim().length > 0;
+            btnSync.disabled = !(autoAudio.files.length && hasLyrics);
+        }
+
+        function activatePasteTextMode(prefillText = '') {
+            if (prefillText) {
+                autoLyricsText.value = prefillText;
+            }
+
+            const textRadio = document.querySelector('input[name="lyrics-source"][value="text"]');
+            if (textRadio) {
+                textRadio.checked = true;
+            }
+
+            lyricsMode = 'text';
+            autoLyricsFile.classList.add('hidden');
+            autoLyricsText.classList.remove('hidden');
+            autoLyricsFile.value = '';
+            checkAutoReady();
+        }
+
+        function lrcToPlainText(lrcText = '') {
+            return lrcText
+                .split('\n')
+                .map(line => line.replace(/^\s*\[\d+:\d{2}(?:\.\d+)?\]\s*/, '').trim())
+                .filter(Boolean)
+                .join('\n');
+        }
+
+        autoAudio.addEventListener('change', checkAutoReady);
+        autoLyricsFile.addEventListener('change', checkAutoReady);
+        autoLyricsText.addEventListener('input', checkAutoReady);
+
+        // ─── Extract embedded lyrics when MP3 is chosen ───
+        autoAudio.addEventListener('change', async () => {
+            const file = autoAudio.files[0];
+            embeddedWrap.classList.add('hidden');
+            embedLrcText.value = '';
+            if (!file) return;
+
+            embedStatusText.style.color = '#888';
+            embedStatusText.textContent = '🔍 Checking for embedded lyrics…';
+            embeddedWrap.classList.remove('hidden');
+
+            try {
+                const form = new FormData();
+                form.append('mp3', file);
+                const resp = await fetch('/lyrics/from-mp3', { method: 'POST', body: form });
+                if (!resp.ok) {
+                    embedStatusText.style.color = '#f88';
+                    embedStatusText.textContent = '⚠️ Could not read embedded lyrics.';
+                    return;
+                }
+                const data = await resp.json();
+                const found = data.sources && (data.sources.uslt || data.sources.txxx_lyrics || data.sources.sylt);
+                if (!found || (!data.plain_lyrics && !data.timed_lyrics_lrc)) {
+                    embedStatusText.style.color = '#888';
+                    embedStatusText.textContent = 'ℹ️ No embedded lyrics found.';
+                    timedLrcPanel.classList.add('hidden');
+                    return;
+                }
+
+                // Build source label
+                const srcNames = [];
+                if (data.sources.uslt) srcNames.push('USLT');
+                if (data.sources.txxx_lyrics) srcNames.push('TXXX');
+                if (data.sources.sylt) srcNames.push('SYLT');
+                embedStatusText.style.color = '#8f8';
+                embedStatusText.textContent = `✅ Found embedded lyrics (${srcNames.join('/')}).`;
+
+                // Show timed LRC panel if available
+                if (data.timed_lyrics_lrc) {
+                    embedLrcText.value = data.timed_lyrics_lrc;
+                    timedLrcPanel.classList.remove('hidden');
+                } else {
+                    timedLrcPanel.classList.add('hidden');
+                }
+
+                // Always switch to paste-text mode when lyrics were extracted.
+                // If plain lyrics are missing, derive readable plain text from timed LRC.
+                const extractedPlain = (data.plain_lyrics && data.plain_lyrics.trim())
+                    ? data.plain_lyrics
+                    : lrcToPlainText(data.timed_lyrics_lrc || '');
+                activatePasteTextMode(extractedPlain);
+            } catch (e) {
+                embedStatusText.style.color = '#f88';
+                embedStatusText.textContent = '⚠️ Error checking embedded lyrics.';
+                console.error(e);
+            }
+        });
+
+        lyricsSource.forEach(radio => {
+            radio.addEventListener('change', () => {
+                lyricsMode = radio.value;
+                const usingFile = lyricsMode === 'file';
+                autoLyricsFile.classList.toggle('hidden', !usingFile);
+                autoLyricsText.classList.toggle('hidden', usingFile);
+                if (usingFile) autoLyricsText.value = '';
+                else autoLyricsFile.value = '';
+                checkAutoReady();
+            });
+        });
+
+        // ─── AUTO-SYNC: Call the API ───
+        btnSync.addEventListener('click', async () => {
+            const mp3File = autoAudio.files[0];
+            const lyricPayload = lyricsMode === 'file'
+                ? autoLyricsFile.files[0]
+                : new Blob([autoLyricsText.value], { type: 'text/plain' });
+            if (!mp3File || !lyricPayload) return;
+
+            btnSync.disabled = true;
+            setStatus('Uploading and syncing… this may take a minute.', true);
+            setSyncNoteBusy(true);
+            if (btnSyncDownload) btnSyncDownload.disabled = true;
+            if (btnCopyTimestamped) btnCopyTimestamped.disabled = true;
+            if (syncResultPanel) syncResultPanel.classList.remove('ready');
+
+            try {
+                const form = new FormData();
+                form.append('mp3', mp3File);
+                form.append('lyrics', lyricPayload, lyricsMode === 'file' ? lyricPayload.name || 'lyrics.txt' : 'lyrics.txt');
+                form.append('embed_mode', document.querySelector('input[name="embed-mode"]:checked').value);
+
+                const resp = await fetch('/sync', { method: 'POST', body: form });
+
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+                    throw new Error(err.detail || 'Sync failed');
+                }
+
+                setStatus('Processing response…', true);
+
+                // Response is a ZIP containing _synced.mp3 and _synced.lrc
+                const blob = await resp.blob();
+                const zip  = await loadZip(blob);
+
+                // Find the files in the ZIP
+                let mp3Blob = null, lrcText = null;
+                for (const [name, data] of zip) {
+                    if (name.endsWith('.mp3')) mp3Blob = data;
+                    if (name.endsWith('.lrc')) lrcText = await data.text();
+                }
+
+                if (!mp3Blob || !lrcText) throw new Error('ZIP missing expected files');
+
+                // Load audio
+                player.src = URL.createObjectURL(mp3Blob);
+
+                // Store result for manual download and copy workflow.
+                lastSyncZipBlob = blob;
+                lastSyncZipFileName = mp3File.name.replace('.mp3', '_synced.zip');
+                if (syncResultPanel) syncResultPanel.classList.remove('hidden');
+                if (timestampedLyricsOutput) {
+                    timestampedLyricsOutput.value = lrcText;
+                }
+                if (btnSyncDownload) btnSyncDownload.disabled = false;
+                if (btnCopyTimestamped) btnCopyTimestamped.disabled = !lrcText.trim();
+                if (syncResultPanel) syncResultPanel.classList.add('ready');
+
+                // Parse LRC and display
+                parseLrc(lrcText);
+
+                setStatus(`✅ Synced! ${syncMap.length} lines aligned. Press play.`, false);
+
+            } catch (err) {
+                setStatus(`❌ Error: ${err.message}`, false);
+                console.error(err);
+            } finally {
+                btnSync.disabled = false;
+                checkAutoReady();
+                setSyncNoteBusy(false);
+            }
+        });
+
+        // ─── MANUAL: Load local files ───
+        manualAudio.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                player.src = URL.createObjectURL(file);
+                setStatus('Audio loaded. Paste LRC text next.', false);
+            }
+        });
+
+        manualLrcText.addEventListener('input', (e) => {
+            const text = e.target.value;
+            if (!text.trim()) {
+                setStatus('Awaiting LRC text…', false);
+                syncMap = [];
+                selectedLineIdx = -1;
+                content.innerHTML = '<div class="lyric-line active">Waiting for LRC text...</div>';
+                return;
+            }
+            parseLrc(text);
+            setStatus(`✅ LRC text loaded: ${syncMap.length} lines. Press play.`, false);
+        });
+
+        btnManualSetCurrent?.addEventListener('click', () => {
+            if (!syncMap.length) return;
+            const idx = selectedLineIdx >= 0 ? selectedLineIdx : Math.max(0, lastActive);
+            const nowMs = Math.max(0, Math.round(player.currentTime * 1000));
+            syncMap[idx].time = nowMs;
+            updateManualTextareaFromSyncMap();
+            parseLrc(manualLrcText.value);
+            selectedLineIdx = idx;
+            setStatus(`Updated line ${idx + 1} to ${formatLrcTimestamp(nowMs)}.`, false);
+        });
+
+        btnManualNudgeBack?.addEventListener('click', () => {
+            if (!syncMap.length) return;
+            const idx = selectedLineIdx >= 0 ? selectedLineIdx : Math.max(0, lastActive);
+            syncMap[idx].time = Math.max(0, syncMap[idx].time - 100);
+            updateManualTextareaFromSyncMap();
+            parseLrc(manualLrcText.value);
+            selectedLineIdx = idx;
+            setStatus(`Nudged line ${idx + 1} by -100ms.`, false);
+        });
+
+        btnManualNudgeForward?.addEventListener('click', () => {
+            if (!syncMap.length) return;
+            const idx = selectedLineIdx >= 0 ? selectedLineIdx : Math.max(0, lastActive);
+            syncMap[idx].time = Math.max(0, syncMap[idx].time + 100);
+            updateManualTextareaFromSyncMap();
+            parseLrc(manualLrcText.value);
+            selectedLineIdx = idx;
+            setStatus(`Nudged line ${idx + 1} by +100ms.`, false);
+        });
+
+        btnManualExport?.addEventListener('click', () => {
+            if (!syncMap.length) return;
+            const lrcText = serializeSyncMapToLrc() + '\n';
+            const blob = new Blob([lrcText], { type: 'text/plain;charset=utf-8' });
+            offerDownload(blob, 'manual_fixed.lrc');
+            setStatus('Downloaded fixed LRC.', false);
+        });
+
+        btnManualUseInput?.addEventListener('click', () => {
+            if (!syncMap.length) {
+                setStatus('No fixed LRC lines available to use as input.', false);
+                return;
+            }
+
+            // Use the edited timestamped lines as lyric text input for sync.
+            autoLyricsText.value = syncMap.map(item => item.text).join('\n');
+            const textRadio = document.querySelector('input[name="lyrics-source"][value="text"]');
+            if (textRadio) {
+                textRadio.checked = true;
+                lyricsMode = 'text';
+                autoLyricsFile.classList.add('hidden');
+                autoLyricsText.classList.remove('hidden');
+                autoLyricsFile.value = '';
+            }
+
+            // Move user to Auto Sync tab.
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            const autoTab = document.querySelector('.tab[data-tab="auto"]');
+            if (autoTab) autoTab.classList.add('active');
+            document.getElementById('tab-auto')?.classList.add('active');
+
+            checkAutoReady();
+            setStatus('Fixed lyrics copied to Auto Sync input. Select MP3 (if needed) and run sync.', false);
+        });
+
+        // ─── LRC Parser ───
+        function parseLrc(raw) {
+            syncMap = [];
+            selectedLineIdx = -1;
+            raw.split('\n').forEach(line => {
+                const match = line.match(/\[(\d+):(\d+\.?\d*)\](.*)/);
+                if (match) {
+                    const ms = (parseInt(match[1]) * 60 + parseFloat(match[2])) * 1000;
+                    const text = match[3].trim();
+                    if (text) syncMap.push({ time: ms, text });
+                }
+            });
+            renderSyncMapLines();
+        }
+
+        // ─── Sync Engine ───
+        let lastActive = -1;
+        player.addEventListener('timeupdate', () => {
+            if (manualEditingMode) {
+                return;
+            }
+
+            const now = player.currentTime * 1000;
+            let activeIdx = -1;
+
+            for (let i = syncMap.length - 1; i >= 0; i--) {
+                if (now >= syncMap[i].time) { activeIdx = i; break; }
+            }
+
+            if (activeIdx !== lastActive) {
+                lastActive = activeIdx;
+                document.querySelectorAll('.lyric-line').forEach(el => el.classList.remove('active'));
+                if (activeIdx >= 0) {
+                    const activeEl = document.getElementById(`line-${activeIdx}`);
+                    if (activeEl) {
+                        activeEl.classList.add('active');
+                        const targetScroll = activeEl.offsetTop - (windowEl.offsetHeight / 2);
+                        windowEl.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
+                    }
+                }
+            }
+        });
+
+        // ─── Minimal ZIP reader (no external lib needed) ───
+        async function loadZip(blob) {
+            const buf  = await blob.arrayBuffer();
+            const view = new DataView(buf);
+            const entries = [];
+            let offset = 0;
+
+            while (offset < buf.byteLength - 4) {
+                const sig = view.getUint32(offset, true);
+                if (sig !== 0x04034b50) break; // local file header
+
+                const compMethod  = view.getUint16(offset + 8, true);
+                const compSize    = view.getUint32(offset + 18, true);
+                const uncompSize  = view.getUint32(offset + 22, true);
+                const nameLen     = view.getUint16(offset + 26, true);
+                const extraLen    = view.getUint16(offset + 28, true);
+                const nameBytes   = new Uint8Array(buf, offset + 30, nameLen);
+                const fileName    = new TextDecoder().decode(nameBytes);
+                const dataStart   = offset + 30 + nameLen + extraLen;
+                const fileData    = buf.slice(dataStart, dataStart + compSize);
+
+                if (compMethod === 0) {
+                    // Stored (no compression)
+                    entries.push([fileName, new Blob([fileData])]);
+                } else if (compMethod === 8) {
+                    // Deflated — use DecompressionStream
+                    const ds = new DecompressionStream('deflate-raw');
+                    const writer = ds.writable.getWriter();
+                    writer.write(new Uint8Array(fileData));
+                    writer.close();
+                    const decompressed = await new Response(ds.readable).blob();
+                    entries.push([fileName, decompressed]);
+                } else {
+                    console.warn(`Unsupported compression method ${compMethod} for ${fileName}`);
+                }
+
+                offset = dataStart + compSize;
+            }
+            return entries;
+        }
+
+        // ─── Offer download ───
+        function offerDownload(blob, fileName) {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = fileName;
+            a.click();
+            URL.revokeObjectURL(a.href);
+        }
+    </script>
+</body>
+</html>

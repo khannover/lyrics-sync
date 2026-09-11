@@ -18,6 +18,7 @@ services:
     expose:
       - "8000"
     volumes:
+      - ./app:/app/app
       - model-cache:/app/models
       - lyric-sync-work:/tmp/lyric-sync
     environment:

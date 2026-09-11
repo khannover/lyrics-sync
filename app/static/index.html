@@ -3,1176 +3,461 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KAI | Lyric Sync Console</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap');
-
-        :root {
-            --bg: #040b12;
-            --bg-2: #07111c;
-            --panel: rgba(6, 18, 31, 0.92);
-            --panel-soft: rgba(10, 24, 40, 0.78);
-            --border: rgba(74, 122, 173, 0.38);
-            --text: #d7e5f4;
-            --muted: #85a1bc;
-            --accent: #36c1ff;
-            --accent-2: #ff9a3d;
-            --active: #7fe0ff;
-            --shell-width: min(1500px, 98vw);
-        }
-
-        * { box-sizing: border-box; }
-        html, body { height: 100%; }
-
-        body {
-            margin: 0;
-            color: var(--text);
-            font-family: 'IBM Plex Mono', monospace;
-            background:
-                radial-gradient(1000px 540px at 10% -15%, rgba(54, 193, 255, 0.16), transparent 60%),
-                radial-gradient(1000px 540px at 100% 0%, rgba(255, 154, 61, 0.13), transparent 65%),
-                linear-gradient(165deg, var(--bg), var(--bg-2));
-            display: grid;
-            grid-template-rows: auto 1fr;
-            overflow: hidden;
-            position: relative;
-        }
-
-        body::before {
-            content: "";
-            position: fixed;
-            inset: 0;
-            pointer-events: none;
-            background: repeating-linear-gradient(
-                to bottom,
-                rgba(255, 255, 255, 0.02) 0,
-                rgba(255, 255, 255, 0.02) 1px,
-                transparent 2px,
-                transparent 4px
-            );
-            opacity: 0.17;
-            mix-blend-mode: soft-light;
-        }
-
-        .masthead {
-            width: var(--shell-width);
-            margin: 12px auto 10px;
-            padding: 12px 16px;
-            border-radius: 14px;
-            border: 1px solid var(--border);
-            background: rgba(4, 14, 24, 0.76);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            backdrop-filter: blur(7px);
-        }
-
-        .brand {
-            font-family: 'Space Grotesk', sans-serif;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            color: var(--accent);
-            font-size: 1.02rem;
-        }
-
-        .subtitle {
-            color: var(--muted);
-            font-size: 0.78rem;
-        }
-
-        .app-shell {
-            width: var(--shell-width);
-            margin: 0 auto 12px;
-            min-height: 0;
-            display: grid;
-            grid-template-columns: minmax(360px, 460px) 1fr;
-            gap: 14px;
-        }
-
-        .control-panel,
-        .viewer-panel {
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            background: var(--panel);
-            box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
-            min-height: 0;
-        }
-
-        .control-panel {
-            display: flex;
-            flex-direction: column;
-            padding: 14px;
-            overflow: auto;
-            gap: 12px;
-        }
-
-        .tabs {
-            display: flex;
-            gap: 8px;
-            padding: 4px;
-            border-radius: 10px;
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(255, 255, 255, 0.06);
-        }
-
-        .tab {
-            flex: 1;
-            text-align: center;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 8px;
-            padding: 8px 10px;
-            color: var(--muted);
-            font-size: 0.74rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            cursor: pointer;
-            transition: 180ms ease;
-        }
-
-        .tab:hover { color: var(--text); border-color: rgba(127, 224, 255, 0.4); }
-
-        .tab.active {
-            color: #001422;
-            background: linear-gradient(135deg, var(--active), var(--accent));
-            border-color: transparent;
-            font-weight: 700;
-        }
-
-        .tab-content { display: none; }
-        .tab-content.active {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;            
-            margin-top: 50px;
-
-        }
-
-        .control-group {
-            border: 1px solid rgba(124, 171, 221, 0.24);
-            border-radius: 12px;
-            background: var(--panel-soft);
-            padding: 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        label {
-            color: var(--accent-2);
-            font-size: 0.73rem;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            font-weight: 700;
-        }
-
-        input[type="file"], textarea {
-            width: 100%;
-            border: 1px solid rgba(124, 171, 221, 0.3);
-            border-radius: 10px;
-            background: #020914;
-            color: var(--text);
-            padding: 10px;
-            font-family: 'IBM Plex Mono', monospace;
-            font-size: 0.88rem;
-        }
-
-        input[type="file"]::file-selector-button {
-            border: 1px solid rgba(127, 224, 255, 0.42);
-            border-radius: 6px;
-            padding: 6px 10px;
-            margin-right: 10px;
-            color: #051624;
-            background: linear-gradient(135deg, var(--active), var(--accent));
-            font-family: 'IBM Plex Mono', monospace;
-            font-weight: 700;
-            cursor: pointer;
-        }
-
-        textarea { min-height: 120px; resize: vertical; }
-        .lyrics-textarea { min-height: 120px; }
-        .hidden { display: none; }
-
-        .choice-row {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .choice-row label {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin: 0;
-            color: var(--muted);
-            text-transform: none;
-            letter-spacing: 0;
-            font-size: 0.96rem;
-            border: 1px solid rgba(124, 171, 221, 0.3);
-            border-radius: 10px;
-            background: rgba(255, 255, 255, 0.04);
-            padding: 9px 10px;
-            cursor: pointer;
-            transition: 160ms ease;
-        }
-
-        .choice-row label:hover {
-            border-color: rgba(127, 224, 255, 0.5);
-            background: rgba(74, 122, 173, 0.22);
-        }
-
-        .choice-row input[type="radio"] {
-            accent-color: var(--accent-2);
-            width: 16px;
-            height: 16px;
-        }
-
-        .embed-note {
-            font-size: 0.78rem;
-            color: var(--muted);
-            line-height: 1.4;
-        }
-
-        .manual-tools {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .manual-tools-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-
-        .manual-btn {
-            border: 1px solid rgba(124, 171, 221, 0.36);
-            border-radius: 9px;
-            background: rgba(255, 255, 255, 0.04);
-            color: var(--text);
-            font-family: 'IBM Plex Mono', monospace;
-            font-size: 0.78rem;
-            letter-spacing: 0.02em;
-            padding: 8px 10px;
-            cursor: pointer;
-            transition: 160ms ease;
-        }
-
-        .result-panel {
-            border: 1px solid rgba(124, 171, 221, 0.24);
-            border-radius: 12px;
-            background: rgba(2, 9, 20, 0.62);
-            padding: 10px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .result-panel.hidden {
-            display: none;
-        }
-
-        .result-actions {
-            display: flex;
-            flex-wrap: nowrap;
-            gap: 8px;
-        }
-
-        .result-actions .manual-btn {
-            min-width: 0;
-            flex: 1;
-        }
-
-        .result-panel.ready {
-            border-color: rgba(127, 224, 255, 0.56);
-            background: rgba(54, 193, 255, 0.1);
-            box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.2) inset, 0 0 20px rgba(54, 193, 255, 0.16);
-            animation: result-ready-pulse 1.4s ease-in-out 2;
-        }
-
-        .result-panel.ready label::after {
-            content: '  READY';
-            color: #9fffd0;
-            font-weight: 700;
-            letter-spacing: 0.06em;
-            font-size: 0.72rem;
-        }
-
-        @keyframes result-ready-pulse {
-            0% { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.1) inset, 0 0 0 rgba(54, 193, 255, 0.0); }
-            50% { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.3) inset, 0 0 24px rgba(54, 193, 255, 0.22); }
-            100% { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.2) inset, 0 0 20px rgba(54, 193, 255, 0.16); }
-        }
-
-        @media (max-width: 520px) {
-            .result-actions {
-                flex-direction: row;
-            }
-
-            .result-actions .manual-btn {
-                font-size: 0.7rem;
-                padding: 8px 6px;
-            }
-        }
-
-        .manual-btn:hover {
-            border-color: rgba(127, 224, 255, 0.52);
-            background: rgba(54, 193, 255, 0.12);
-        }
-
-        .manual-tools-note {
-            font-size: 0.74rem;
-            color: var(--muted);
-            line-height: 1.4;
-        }
-
-        .manual-toggle {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            color: var(--text);
-            font-size: 0.78rem;
-            padding: 6px 0 2px;
-        }
-
-        .manual-toggle input[type="checkbox"] {
-            width: 16px;
-            height: 16px;
-            accent-color: var(--accent);
-        }
-
-        .sync-note {
-            border: 1px solid rgba(255, 154, 61, 0.34);
-            border-left: 4px solid var(--accent-2);
-            border-radius: 10px;
-            background: rgba(255, 154, 61, 0.08);
-            color: #ffd3b0;
-            font-size: 0.78rem;
-            line-height: 1.45;
-            padding: 10px;
-            transition: 180ms ease;
-        }
-
-        .sync-note.busy {
-            border-color: rgba(127, 224, 255, 0.4);
-            border-left-color: var(--accent);
-            background: rgba(54, 193, 255, 0.1);
-            color: #d9f4ff;
-            box-shadow: 0 0 0 1px rgba(54, 193, 255, 0.12) inset;
-            animation: sync-note-pulse 1.25s ease-in-out infinite;
-        }
-
-        .sync-note.busy::after {
-            content: ' ...';
-            display: inline-block;
-            width: 1.6em;
-            overflow: hidden;
-            vertical-align: bottom;
-            animation: sync-note-dots 1s steps(4, end) infinite;
-        }
-
-        @keyframes sync-note-pulse {
-            0% {
-                box-shadow: 0 0 0 1px rgba(54, 193, 255, 0.12) inset, 0 0 0 rgba(54, 193, 255, 0.0);
-            }
-            50% {
-                box-shadow: 0 0 0 1px rgba(54, 193, 255, 0.2) inset, 0 0 16px rgba(54, 193, 255, 0.18);
-            }
-            100% {
-                box-shadow: 0 0 0 1px rgba(54, 193, 255, 0.12) inset, 0 0 0 rgba(54, 193, 255, 0.0);
-            }
-        }
-
-        @keyframes sync-note-dots {
-            0% { width: 0; }
-            100% { width: 1.6em; }
-        }
-
-        #btn-sync {
-            border: none;
-            border-radius: 10px;
-            min-height: 48px;
-            background: linear-gradient(135deg, var(--accent-2), #ff6d1f);
-            color: #201205;
-            font-family: 'Space Grotesk', sans-serif;
-            font-weight: 700;
-            font-size: 1rem;
-            text-transform: uppercase;
-            letter-spacing: 0.09em;
-            cursor: pointer;
-            box-shadow: 0 12px 28px rgba(255, 109, 31, 0.25);
-            transition: 180ms ease;
-        }
-
-        #btn-sync:hover { transform: translateY(-1px); filter: brightness(1.05); }
-        #btn-sync:disabled {
-            background: #33455b;
-            color: #89a0ba;
-            cursor: not-allowed;
-            box-shadow: none;
-            transform: none;
-            filter: none;
-        }
-
-        #embedded-lyrics-wrap {
-            border: 1px solid rgba(124, 171, 221, 0.24);
-            border-radius: 12px;
-            background: rgba(2, 9, 20, 0.65);
-            padding: 10px;
-        }
-
-        .embed-status {
-            color: var(--muted);
-            font-size: 0.83rem;
-            margin-bottom: 6px;
-        }
-
-        .embedded-lyrics-panel {
-            border: 1px solid rgba(124, 171, 221, 0.24);
-            border-radius: 10px;
-            background: rgba(255, 255, 255, 0.03);
-            padding: 10px;
-        }
-
-        .embedded-lyrics-panel summary {
-            color: var(--accent);
-            font-size: 0.8rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            cursor: pointer;
-            user-select: none;
-        }
-
-        .embedded-lyrics-panel textarea {
-            min-height: 90px;
-            margin-top: 8px;
-        }
-
-        .viewer-panel {
-            display: grid;
-            grid-template-rows: auto 1fr auto;
-            overflow: hidden;
-        }
-
-        .status-bar {
-            margin: 12px 12px 0;
-            padding: 10px 12px;
-            border: 1px solid rgba(124, 171, 221, 0.3);
-            border-radius: 10px;
-            background: rgba(3, 10, 19, 0.75);
-            color: var(--muted);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            min-height: 40px;
-            font-size: 0.85rem;
-        }
-
-        .status-bar.loading { color: var(--text); }
-
-        .status-bar .spinner {
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(124, 171, 221, 0.45);
-            border-top-color: var(--accent-2);
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            display: none;
-        }
-
-        .status-bar.loading .spinner { display: inline-block; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        #lyrics-window {
-            margin: 12px;
-            border-radius: 12px;
-            border: 1px solid rgba(124, 171, 221, 0.22);
-            background: rgba(2, 8, 16, 0.65);
-            overflow-y: auto;
-            text-align: center;
-            scroll-behavior: smooth;
-            mask-image: linear-gradient(transparent, black 18%, black 82%, transparent);
-            -webkit-mask-image: linear-gradient(transparent, black 18%, black 82%, transparent);
-        }
-
-        #lyrics-content { padding: 16vh 0; }
-
-        .lyric-line {
-            padding: 15px 16px;
-            font-size: clamp(1.02rem, 2.2vw, 1.7rem);
-            color: rgba(215, 229, 244, 0.3);
-            filter: blur(1.7px);
-            transform: scale(0.9);
-            transition: 260ms ease;
-            cursor: pointer;
-        }
-
-        .lyric-line:hover {
-            color: rgba(215, 229, 244, 0.6);
-            filter: blur(0.6px);
-        }
-
-        .active {
-            color: var(--accent-2) !important;
-            filter: blur(0) !important;
-            transform: scale(1.12) !important;
-            text-shadow: 0 0 14px rgba(255, 154, 61, 0.45);
-            font-weight: 700;
-        }
-
-        .player-container {
-            border-top: 1px solid rgba(124, 171, 221, 0.24);
-            background: rgba(4, 12, 22, 0.84);
-            padding: 10px 12px;
-            display: flex;
-            justify-content: center;
-        }
-
-        audio { width: min(960px, 98%); }
-
-        @media (max-width: 1080px) {
-            .app-shell {
-                grid-template-columns: 1fr;
-                grid-template-rows: auto 1fr;
-            }
-
-            .control-panel { max-height: 50vh; }
-        }
-
-        @media (max-width: 720px) {
-            .masthead {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-
-            .tab { font-size: 0.68rem; }
-            .control-panel { padding: 10px; }
-            #lyrics-content { padding: 12vh 0; }
-        }
-    </style>
+    <title>KAI // LYRICS-SYNC & AUDIO INTELLIGENCE</title>
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/layout.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/inspector.css">
 </head>
 <body>
-    <header class="masthead">
-        <div class="brand">KAI LYRIC SYNC CONSOLE</div>
-        <div class="subtitle">Whisper alignment + ID3 embedding controls</div>
+    <!-- Top Masthead -->
+    <header class="app-header">
+        <div class="brand-wrap">
+            <div class="brand-icon">⚡</div>
+            <div class="brand-titles">
+                <div class="brand-title">KAI <span class="accent">//</span> LYRICS-SYNC & AUDIO INTELLIGENCE</div>
+                <div class="brand-subtitle">Whisper DTW • Neural Genre • AcoustID Fingerprint • AI Provenance • NSFW Filter</div>
+            </div>
+        </div>
+
+        <div class="telemetry-bar">
+            <div class="telemetry-pill online" id="pill-service-status">
+                <span class="telemetry-dot"></span> SERVICE ONLINE
+            </div>
+            <div class="telemetry-pill" id="pill-queue-status">
+                QUEUE: 0 / 1 SLOTS
+            </div>
+            <div class="telemetry-pill" id="pill-disk-status">
+                DISK: -- GB FREE
+            </div>
+        </div>
     </header>
 
+    <!-- Workspace Tabs -->
+    <nav class="tabs-bar">
+        <button class="tab-btn active" data-tab="sync">
+            <span>⚡ AUTO SYNC</span>
+            <span class="badge-pill">DTW</span>
+        </button>
+        <button class="tab-btn" data-tab="inspector">
+            <span>🛡️ AUDIO INSPECTOR</span>
+            <span class="badge-pill">AUDIT</span>
+        </button>
+        <button class="tab-btn" data-tab="editor">
+            <span>⏱️ MANUAL LRC STUDIO</span>
+        </button>
+        <button class="tab-btn" data-tab="telemetry">
+            <span>📡 TELEMETRY & API</span>
+        </button>
+    </nav>
+
+    <!-- Main Workspace Shell -->
     <main class="app-shell">
-        <section class="control-panel">
-            <div class="tabs">
-                <div class="tab active" data-tab="auto">Auto Sync API</div>
-                <div class="tab" data-tab="manual">Manual LRC Preview</div>
-            </div>
+        <!-- Left Deck: Active Tool Controller -->
+        <section class="control-deck">
+            <div class="deck-body">
 
-            <div class="tab-content active" id="tab-auto">
-                <div class="control-group group-audio">
-                    <label>1. Select Audio (.mp3)</label>
-                    <input type="file" id="auto-audio" accept=".mp3,audio/mpeg">
-                </div>
-
-                <div class="control-group group-lyrics">
-                    <label>2. Lyrics Source</label>
-                    <div class="choice-row vertical">
-                        <label><input type="radio" name="lyrics-source" value="file" checked> Upload file</label>
-                        <label><input type="radio" name="lyrics-source" value="text"> Paste text</label>
-                    </div>
-                    <input type="file" id="auto-lyrics-file" accept=".txt,text/plain">
-                    <textarea id="auto-lyrics-text" class="lyrics-textarea hidden" placeholder="Paste lyrics here..."></textarea>
-                    <div class="sync-note" id="sync-note">
-                        Use lyrics that actually match what is sung in the generated audio. If extracted or pasted lyrics differ from the vocal, alignment quality will drop and timestamps may look wrong.
-                    </div>
-                </div>
-
-                <div class="control-group group-embed" id="embed-mode-group">
-                    <label>3. Embed Mode</label>
-                    <div class="choice-row vertical">
-                        <label title="Writes synced LRC text into USLT and TXXX:LYRICS (replaces plain lyrics)">
-                            <input type="radio" name="embed-mode" value="overwrite" checked> Overwrite lyrics tags
+                <!-- ─── TAB 1: AUTO SYNC ─── -->
+                <div class="deck-tab-panel active" id="tab-sync" style="display:flex; flex-direction:column; gap:16px;">
+                    <!-- Step 1: Audio Input -->
+                    <div class="field-group">
+                        <label class="field-label">
+                            <span>1. Select Master Audio (.mp3)</span>
+                            <span class="label-sub">Max 100MB</span>
                         </label>
-                        <label title="Writes only the SYLT frame and keeps existing plain lyrics intact">
-                            <input type="radio" name="embed-mode" value="sylt_only"> SYLT only (keep plain lyrics)
-                        </label>
-                    </div>
-                    <div class="embed-note">`overwrite` updates USLT + TXXX:LYRICS with synced content. `sylt_only` writes only SYLT and preserves plain text tags.</div>
-                </div>
-
-                <div class="control-group group-action">
-                    <label>4. Run</label>
-                    <button id="btn-sync" disabled>Sync Lyrics</button>
-                </div>
-
-                <div id="embedded-lyrics-wrap" class="hidden">
-                    <div class="embed-status" id="embed-status-text"></div>
-                    <details class="embedded-lyrics-panel" id="timed-lrc-panel">
-                        <summary>Timed Lyrics (LRC)</summary>
-                        <textarea id="embed-lrc-text" readonly></textarea>
-                    </details>
-                </div>
-
-                <div class="result-panel hidden" id="sync-result-panel">
-                    <label>Sync Result</label>
-                    <div class="result-actions">
-                        <button type="button" class="manual-btn" id="btn-sync-download" disabled>Download synced ZIP</button>
-                        <button type="button" class="manual-btn" id="btn-copy-timestamped" disabled>Copy timestamped lyrics</button>
-                    </div>
-                    <textarea id="timestamped-lyrics-output" class="lyrics-textarea" placeholder="Timestamped lyrics will appear here after sync..." readonly></textarea>
-                </div>
-            </div>
-
-            <div class="tab-content" id="tab-manual">
-                <div class="control-group">
-                    <label>1. Select Audio (.mp3)</label>
-                    <input type="file" id="manual-audio" accept=".mp3,audio/mpeg">
-                </div>
-                <div class="control-group">
-                    <label>2. Paste Sync Data (LRC text)</label>
-                    <textarea id="manual-lrc-text" class="lyrics-textarea" placeholder="Paste LRC content here..."></textarea>
-                </div>
-                <div class="control-group">
-                    <label>3. Manual Alignment Tools</label>
-                    <div class="manual-tools">
-                        <label class="manual-toggle">
-                            <input type="checkbox" id="manual-editing-mode">
-                            Editing Mode (no auto-play on line click, freeze timeline highlight)
-                        </label>
-                        <div class="manual-tools-row">
-                            <button type="button" class="manual-btn" id="btn-manual-set-current">Set selected line to current time</button>
-                            <button type="button" class="manual-btn" id="btn-manual-nudge-back">Nudge -100ms</button>
-                            <button type="button" class="manual-btn" id="btn-manual-nudge-forward">Nudge +100ms</button>
+                        <div class="dropzone" id="sync-audio-dropzone">
+                            <div class="dropzone-icon">🎵</div>
+                            <div class="dropzone-title">Drop MP3 Audio Here</div>
+                            <div class="dropzone-sub">or click to browse local files</div>
+                            <input type="file" id="sync-audio-input" accept=".mp3,audio/mpeg">
                         </div>
-                        <div class="manual-tools-row">
-                            <button type="button" class="manual-btn" id="btn-manual-export">Download fixed LRC</button>
-                            <button type="button" class="manual-btn" id="btn-manual-use-input">Use my fixed timestamped lyrics as sync input</button>
+                        <div class="file-loaded-pill hidden" id="sync-audio-loaded">
+                            <div class="file-loaded-info">
+                                <span>🎵</span>
+                                <span class="file-loaded-name truncate" id="sync-audio-filename">audio.mp3</span>
+                                <span class="file-loaded-size" id="sync-audio-filesize">0 MB</span>
+                            </div>
+                            <button type="button" class="btn-cyber btn-cyber--ghost btn-cyber--sm" id="btn-sync-inspect-shortcut">
+                                🔍 INSPECT
+                            </button>
                         </div>
-                        <div class="manual-tools-note">Tip: click a lyric line in the preview to select it, then use Set/Nudge for precise manual timing.</div>
+                    </div>
+
+                    <!-- Step 2: Lyrics Source -->
+                    <div class="field-group">
+                        <label class="field-label">
+                            <span>2. Lyrics Source</span>
+                            <span class="label-sub">File, text, or auto-extract</span>
+                        </label>
+                        <div class="choice-group">
+                            <label class="choice-btn active" id="btn-choice-file">
+                                <input type="radio" name="lyrics-source" id="source-file" value="file" checked style="display:none;">
+                                📄 Upload File
+                            </label>
+                            <label class="choice-btn" id="btn-choice-text">
+                                <input type="radio" name="lyrics-source" id="source-text" value="text" style="display:none;">
+                                ✏️ Paste Text
+                            </label>
+                        </div>
+
+                        <!-- File upload mode -->
+                        <div id="lyrics-file-wrap">
+                            <input type="file" id="sync-lyrics-file" accept=".txt,.lrc,text/plain" style="width:100%; font-size:0.75rem; color:var(--text-secondary);">
+                        </div>
+
+                        <!-- Text paste mode -->
+                        <div id="lyrics-text-wrap" class="hidden">
+                            <textarea id="sync-lyrics-text" class="text-area" placeholder="Paste song lyrics line-by-line here…"></textarea>
+                        </div>
+
+                        <!-- Extra extraction helpers -->
+                        <div style="display:flex; gap:8px; margin-top:4px;">
+                            <button type="button" class="btn-cyber btn-cyber--ghost btn-cyber--sm" id="btn-extract-embedded" disabled style="flex:1;">
+                                ⚡ EXTRACT FROM MP3
+                            </button>
+                            <button type="button" class="btn-cyber btn-cyber--ghost btn-cyber--sm" id="btn-transcribe-whisper" disabled style="flex:1;">
+                                🎙️ TRANSCRIBE (WHISPER)
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Step 3: Embed Mode -->
+                    <div class="field-group">
+                        <label class="field-label">
+                            <span>3. ID3 Tag Embedding Mode</span>
+                        </label>
+                        <div style="display:flex; flex-direction:column; gap:6px; font-size:0.75rem;">
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                                <input type="radio" name="embed-mode" value="overwrite" checked>
+                                <span><strong>Overwrite</strong> (Updates USLT & TXXX with synced timestamps + SYLT)</span>
+                            </label>
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                                <input type="radio" name="embed-mode" value="sylt_only">
+                                <span><strong>SYLT Only</strong> (Preserves plain lyrics tags intact)</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Step 4: Run Alignment -->
+                    <div class="field-group" style="margin-top:6px;">
+                        <button type="button" class="btn-cyber" id="btn-start-sync" disabled style="width:100%; padding:14px;">
+                            ⚡ RUN WHISPER ALIGNMENT
+                        </button>
+                    </div>
+
+                    <!-- HUD Status -->
+                    <div class="hud-banner hidden" id="sync-hud-status">
+                        <div class="spinner"></div>
+                        <span id="sync-hud-text">Ready.</span>
+                    </div>
+
+                    <!-- Results Card -->
+                    <div class="audit-card audit-card--cyan hidden" id="sync-results-card">
+                        <div class="card-header">
+                            <div class="card-title">✅ Alignment Generated</div>
+                            <div class="card-badge card-badge--cyan">LRC + SYLT</div>
+                        </div>
+                        <div style="font-size:0.74rem; color:var(--text-secondary);">
+                            Timestamps aligned with acoustic precision and embedded into ID3 frames.
+                        </div>
+                        <div style="display:flex; gap:8px; margin-top:6px;">
+                            <button type="button" class="btn-cyber btn-cyber--emerald btn-cyber--sm" id="btn-download-sync-zip" style="flex:1;">
+                                📦 DOWNLOAD ZIP
+                            </button>
+                            <button type="button" class="btn-cyber btn-cyber--ghost btn-cyber--sm" id="btn-copy-sync-lrc" style="flex:1;">
+                                📋 COPY LRC
+                            </button>
+                        </div>
                     </div>
                 </div>
+
+                <!-- ─── TAB 2: AUDIO INSPECTOR & AUDIT ─── -->
+                <div class="deck-tab-panel hidden" id="tab-inspector" style="display:flex; flex-direction:column; gap:16px;">
+                    <div class="field-group">
+                        <label class="field-label">
+                            <span>Inspect Any MP3 Master</span>
+                            <span class="label-sub">AcoustID • AI Watermarks • NSFW • Neural Genres</span>
+                        </label>
+                        <div class="dropzone" id="inspector-dropzone">
+                            <div class="dropzone-icon">🛡️</div>
+                            <div class="dropzone-title">Drop MP3 For Inspection</div>
+                            <div class="dropzone-sub">or click to choose file</div>
+                            <input type="file" id="inspector-input" accept=".mp3,audio/mpeg">
+                        </div>
+                        <div class="file-loaded-pill hidden" id="inspector-loaded-pill">
+                            <div class="file-loaded-info">
+                                <span>🛡️</span>
+                                <span class="file-loaded-name truncate" id="inspector-filename">audio.mp3</span>
+                            </div>
+                            <button type="button" class="btn-cyber btn-cyber--ghost btn-cyber--sm hidden" id="btn-inspector-use-current">
+                                ↺ USE CURRENT AUDIO
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="field-group">
+                        <button type="button" class="btn-cyber" id="btn-run-audio-audit" disabled style="width:100%; padding:12px;">
+                            🔍 RUN COMPREHENSIVE AUDIO AUDIT
+                        </button>
+                    </div>
+
+                    <div class="hud-banner hidden" id="inspector-hud">
+                        <div class="spinner"></div>
+                        <span id="inspector-hud-text">Scanning audio…</span>
+                    </div>
+
+                    <!-- 4-Quadrant Inspector Dashboard -->
+                    <div class="inspector-grid hidden" id="inspector-dashboard">
+                        <!-- Card 1: Copyright & AcoustID Fingerprint -->
+                        <div class="audit-card audit-card--cyan">
+                            <div class="card-header">
+                                <div class="card-title">🎵 Copyright Fingerprint</div>
+                                <div class="card-badge card-badge--cyan" id="card-fingerprint-status">CHROMAPRINT</div>
+                            </div>
+                            <div class="stat-row">
+                                <span class="stat-name">Duration</span>
+                                <span class="stat-val accent-cyan" id="card-fingerprint-duration">--</span>
+                            </div>
+                            <div class="stat-row">
+                                <span class="stat-name">Fingerprint Hash</span>
+                                <button type="button" class="btn-cyber btn-cyber--ghost btn-cyber--sm" id="btn-copy-fingerprint" style="padding:2px 6px; font-size:0.65rem;">
+                                    📋 COPY
+                                </button>
+                            </div>
+                            <div class="code-box" id="card-fingerprint-box">--</div>
+                        </div>
+
+                        <!-- Card 2: AI Provenance & Watermarks -->
+                        <div class="audit-card audit-card--amber">
+                            <div class="card-header">
+                                <div class="card-title">🤖 AI Watermark Radar</div>
+                                <div class="card-badge card-badge--amber">SUNO / UDIO</div>
+                            </div>
+                            <div class="verdict-box verdict-box--emerald" id="card-ai-verdict-box">
+                                <div class="verdict-label" id="card-ai-verdict">SCANNING</div>
+                                <div class="verdict-sub" id="card-ai-reasoning">Awaiting audit run.</div>
+                            </div>
+                            <div class="meter-row">
+                                <div class="meter-header">
+                                    <span>AI Probability</span>
+                                    <span id="card-ai-confidence-val">0%</span>
+                                </div>
+                                <div class="meter-track">
+                                    <div class="meter-fill meter-fill--emerald" id="card-ai-confidence-bar" style="width:0%;"></div>
+                                </div>
+                            </div>
+                            <div class="stat-row">
+                                <span class="stat-name">Suno Watermark</span>
+                                <span class="stat-val" id="card-ai-suno">--</span>
+                            </div>
+                            <div class="stat-row">
+                                <span class="stat-name">Udio Artifacts</span>
+                                <span class="stat-val" id="card-ai-udio">--</span>
+                            </div>
+                            <div class="stat-row">
+                                <span class="stat-name">Spectral Cutoff</span>
+                                <span class="stat-val" id="card-ai-cutoff">--</span>
+                            </div>
+                        </div>
+
+                        <!-- Card 3: Content Safety / NSFW -->
+                        <div class="audit-card audit-card--coral">
+                            <div class="card-header">
+                                <div class="card-title">🔞 Content Safety</div>
+                                <div class="card-badge card-badge--coral">NSFW FILTER</div>
+                            </div>
+                            <div class="verdict-box verdict-box--emerald" id="card-safety-verdict-box">
+                                <div class="verdict-label" id="card-safety-verdict">CLEAN</div>
+                                <div class="verdict-sub">Evaluation based on lyric dictionary scan.</div>
+                            </div>
+                            <div class="stat-row">
+                                <span class="stat-name">Flagged Words</span>
+                                <div class="tags-list" id="card-flagged-words">
+                                    <span style="color:var(--text-muted); font-size:0.7rem;">None</span>
+                                </div>
+                            </div>
+                            <div class="stat-row">
+                                <span class="stat-name">Profanity Hits</span>
+                                <span class="stat-val accent-coral" id="card-score-profanity">0</span>
+                            </div>
+                            <div class="stat-row">
+                                <span class="stat-name">Sexual Hits</span>
+                                <span class="stat-val accent-coral" id="card-score-sexual">0</span>
+                            </div>
+                        </div>
+
+                        <!-- Card 4: Musical DNA & Acoustic Profile -->
+                        <div class="audit-card audit-card--purple">
+                            <div class="card-header">
+                                <div class="card-title">🎹 Musical DNA</div>
+                                <div class="card-badge card-badge--purple" id="card-key-val">KEY --</div>
+                            </div>
+                            <div class="tempo-display">
+                                <div class="beat-pulse-dot"></div>
+                                <div class="tempo-number" id="card-bpm-val">--</div>
+                                <div class="tempo-unit">BPM</div>
+                            </div>
+                            <div class="meter-row">
+                                <div class="meter-header">
+                                    <span>Energy Level</span>
+                                    <span id="card-energy-val">0%</span>
+                                </div>
+                                <div class="meter-track">
+                                    <div class="meter-fill meter-fill--purple" id="card-energy-bar" style="width:0%;"></div>
+                                </div>
+                            </div>
+                            <div class="stat-row">
+                                <span class="stat-name">Danceability</span>
+                                <span class="stat-val" id="card-dance-val">--</span>
+                            </div>
+                            <div class="stat-row">
+                                <span class="stat-name">Loudness</span>
+                                <span class="stat-val" id="card-lufs-val">--</span>
+                            </div>
+                            <div style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;">Neural Genre Predictions:</div>
+                            <div id="card-genres-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ─── TAB 3: MANUAL LRC STUDIO ─── -->
+                <div class="deck-tab-panel hidden" id="tab-editor" style="display:flex; flex-direction:column; gap:14px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                        <button type="button" class="btn-cyber btn-cyber--ghost btn-cyber--sm" id="btn-editor-switch-view">
+                            SWITCH TO RAW LRC
+                        </button>
+                        <div style="display:flex; gap:6px;">
+                            <button type="button" class="btn-cyber btn-cyber--ghost btn-cyber--sm" id="btn-editor-nudge-all-minus" title="Shift all timestamps back by 200ms">
+                                -200ms ALL
+                            </button>
+                            <button type="button" class="btn-cyber btn-cyber--ghost btn-cyber--sm" id="btn-editor-nudge-all-plus" title="Shift all timestamps forward by 200ms">
+                                +200ms ALL
+                            </button>
+                            <button type="button" class="btn-cyber btn-cyber--ghost btn-cyber--sm" id="btn-editor-add-line">
+                                + ADD LINE
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Table View -->
+                    <div id="editor-table-view" style="max-height:360px; overflow-y:auto; border:1px solid var(--border-subtle); border-radius:var(--radius-sm); background:rgba(3,8,15,0.7);">
+                        <table style="width:100%; border-collapse:collapse;">
+                            <thead>
+                                <tr style="border-bottom:1px solid var(--border-subtle); background:rgba(5,14,24,0.9); font-size:0.7rem; color:var(--cyan); text-align:left;">
+                                    <th style="padding:6px; width:32px;"></th>
+                                    <th style="padding:6px; width:90px;">TIME</th>
+                                    <th style="padding:6px;">LYRIC LINE</th>
+                                    <th style="padding:6px; width:130px; text-align:right;">ACTIONS</th>
+                                </tr>
+                            </thead>
+                            <tbody id="editor-table-body"></tbody>
+                        </table>
+                    </div>
+
+                    <!-- Raw Text View -->
+                    <div id="editor-text-view" class="hidden">
+                        <textarea id="editor-raw-textarea" class="text-area" style="min-height:320px;" placeholder="[00:12.34] Paste or edit LRC timestamps directly here…"></textarea>
+                    </div>
+
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" class="btn-cyber btn-cyber--emerald btn-cyber--sm" id="btn-editor-export" style="flex:1;">
+                            💾 DOWNLOAD LRC
+                        </button>
+                        <button type="button" class="btn-cyber btn-cyber--ghost btn-cyber--sm" id="btn-editor-send-to-sync" style="flex:1;">
+                            ⚡ SEND TO AUTO-SYNC
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ─── TAB 4: TELEMETRY & API ─── -->
+                <div class="deck-tab-panel hidden" id="tab-telemetry" style="display:flex; flex-direction:column; gap:16px;">
+                    <div class="audit-card audit-card--cyan">
+                        <div class="card-header">
+                            <div class="card-title">📡 Service Health & Capacity</div>
+                            <div class="card-badge card-badge--cyan" id="telemetry-stat-status">ACTIVE</div>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-name">Version</span>
+                            <span class="stat-val" id="telemetry-stat-version">v1.0.0</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-name">Concurrency Slots</span>
+                            <span class="stat-val" id="telemetry-stat-slots">1</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-name">Waiting in Queue</span>
+                            <span class="stat-val" id="telemetry-stat-waiting">0</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-name">Async Jobs Finished</span>
+                            <span class="stat-val accent-emerald" id="telemetry-stat-completed">--</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-name">Free Disk Space</span>
+                            <span class="stat-val accent-cyan" id="telemetry-stat-disk-free">--</span>
+                        </div>
+                    </div>
+
+                    <div class="audit-card audit-card--purple">
+                        <div class="card-header">
+                            <div class="card-title">💻 Direct API Cheat Sheet</div>
+                            <div class="card-badge card-badge--purple">CURL</div>
+                        </div>
+                        <div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:4px;">1. Full Audio Analysis (JSON):</div>
+                        <div class="code-box">curl -F "mp3=@song.mp3" http://localhost:8005/audio/analyze</div>
+
+                        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:8px; margin-bottom:4px;">2. Whisper Alignment (ZIP):</div>
+                        <div class="code-box">curl -F "mp3=@song.mp3" -F "lyrics=@lyrics.txt" http://localhost:8005/sync -o synced.zip</div>
+
+                        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:8px; margin-bottom:4px;">3. Extract Embedded Tags (JSON):</div>
+                        <div class="code-box">curl -F "mp3=@song.mp3" http://localhost:8005/lyrics/from-mp3</div>
+                    </div>
+                </div>
+
             </div>
         </section>
 
-        <section class="viewer-panel">
-            <div class="status-bar" id="status-bar">
-                <div class="spinner"></div>
-                <span id="status-text">Ready - select files and click Sync.</span>
+        <!-- Right Deck: Synchronized Stage & Cyber Player -->
+        <section class="stage-deck">
+            <div class="stage-header">
+                <div class="stage-title">// SYNCHRONIZED TELEPROMPTER STAGE</div>
+                <div style="font-size:0.7rem; color:var(--text-muted);">Click any line to scrub audio</div>
             </div>
 
-            <div id="lyrics-window">
-                <div id="lyrics-content">
-                    <div class="lyric-line active">Waiting for files...</div>
-                    <div class="lyric-line">Upload an MP3 and lyrics to auto-sync, or load local files.</div>
+            <!-- Scrollable Lyric Teleprompter -->
+            <div class="stage-lyrics-wrap" id="stage-lyrics-wrap"></div>
+
+            <!-- Integrated Audio Player Bar -->
+            <div class="cyber-player">
+                <div class="player-scrubber-row">
+                    <div class="player-time" id="player-cur-time">00:00</div>
+                    <div class="scrubber-bar" id="player-scrubber-bar">
+                        <div class="scrubber-fill" id="player-scrubber-fill"></div>
+                    </div>
+                    <div class="player-time" id="player-total-time">00:00</div>
+                </div>
+
+                <div class="player-controls-row">
+                    <div class="player-main-btns">
+                        <button type="button" class="player-btn play-toggle" id="player-play-toggle" title="Play/Pause (Space)">
+                            ▶
+                        </button>
+                    </div>
+
+                    <div class="player-speeds">
+                        <span style="font-size:0.65rem; color:var(--text-muted); margin-right:4px;">SPEED:</span>
+                        <button type="button" class="speed-chip" data-speed="0.5">0.5x</button>
+                        <button type="button" class="speed-chip" data-speed="0.75">0.75x</button>
+                        <button type="button" class="speed-chip active" data-speed="1.0">1.0x</button>
+                        <button type="button" class="speed-chip" data-speed="1.25">1.25x</button>
+                        <button type="button" class="speed-chip" data-speed="1.5">1.5x</button>
+                    </div>
                 </div>
             </div>
-
-            <div class="player-container"><audio id="audio-player" controls></audio></div>
         </section>
     </main>
 
-    <script>
-        // ─── Elements ───
-        const player    = document.getElementById('audio-player');
-        const content   = document.getElementById('lyrics-content');
-        const windowEl  = document.getElementById('lyrics-window');
-        const statusBar = document.getElementById('status-bar');
-        const statusTxt = document.getElementById('status-text');
-        const btnSync   = document.getElementById('btn-sync');
-
-        const autoAudio   = document.getElementById('auto-audio');
-        const autoLyricsFile = document.getElementById('auto-lyrics-file');
-        const autoLyricsText = document.getElementById('auto-lyrics-text');
-        const lyricsSource = document.querySelectorAll('input[name="lyrics-source"]');
-        const manualAudio = document.getElementById('manual-audio');
-        const manualLrcText = document.getElementById('manual-lrc-text');
-        const btnManualSetCurrent = document.getElementById('btn-manual-set-current');
-        const btnManualNudgeBack = document.getElementById('btn-manual-nudge-back');
-        const btnManualNudgeForward = document.getElementById('btn-manual-nudge-forward');
-        const btnManualExport = document.getElementById('btn-manual-export');
-        const btnManualUseInput = document.getElementById('btn-manual-use-input');
-        const manualEditingModeToggle = document.getElementById('manual-editing-mode');
-        const syncResultPanel = document.getElementById('sync-result-panel');
-        const btnSyncDownload = document.getElementById('btn-sync-download');
-        const btnCopyTimestamped = document.getElementById('btn-copy-timestamped');
-        const timestampedLyricsOutput = document.getElementById('timestamped-lyrics-output');
-        const embeddedWrap = document.getElementById('embedded-lyrics-wrap');
-        const embedStatusText = document.getElementById('embed-status-text');
-        const timedLrcPanel = document.getElementById('timed-lrc-panel');
-        const embedLrcText = document.getElementById('embed-lrc-text');
-        const syncNote = document.getElementById('sync-note');
-
-        const syncNoteDefaultText = 'Use lyrics that actually match what is sung in the generated audio. If extracted or pasted lyrics differ from the vocal, alignment quality will drop and timestamps may look wrong.';
-
-        function setSyncNoteBusy(isBusy) {
-            if (!syncNote) return;
-            if (isBusy) {
-                syncNote.classList.add('busy');
-                syncNote.textContent = 'Sync service is running on the server. This can take a bit depending on audio length and load. Please wait.';
-            } else {
-                syncNote.classList.remove('busy');
-                syncNote.textContent = syncNoteDefaultText;
-            }
-        }
-
-        let syncMap = [];
-        let selectedLineIdx = -1;
-        let manualEditingMode = false;
-        let lastSyncZipBlob = null;
-        let lastSyncZipFileName = 'synced_result.zip';
-
-        function formatLrcTimestamp(ms) {
-            const safe = Math.max(0, Math.round(ms));
-            const minutes = Math.floor(safe / 60000);
-            const seconds = (safe % 60000) / 1000;
-            return `[${String(minutes).padStart(2, '0')}:${seconds.toFixed(2).padStart(5, '0')}]`;
-        }
-
-        function serializeSyncMapToLrc() {
-            return syncMap
-                .map(item => `${formatLrcTimestamp(item.time)}${item.text}`)
-                .join('\n');
-        }
-
-        function updateManualTextareaFromSyncMap() {
-            if (syncMap.length === 0) return;
-            manualLrcText.value = serializeSyncMapToLrc();
-        }
-
-        async function copyTextToClipboard(text) {
-            if (!text) return false;
-            try {
-                await navigator.clipboard.writeText(text);
-                return true;
-            } catch {
-                const ta = document.createElement('textarea');
-                ta.value = text;
-                ta.style.position = 'fixed';
-                ta.style.opacity = '0';
-                document.body.appendChild(ta);
-                ta.focus();
-                ta.select();
-                const ok = document.execCommand('copy');
-                document.body.removeChild(ta);
-                return ok;
-            }
-        }
-
-        function renderSyncMapLines() {
-            content.innerHTML = '';
-            syncMap.forEach((item, i) => {
-                const div = document.createElement('div');
-                div.className = 'lyric-line';
-                div.id = `line-${i}`;
-                div.innerText = item.text;
-                // Click selects line and seeks.
-                div.addEventListener('click', () => {
-                    selectedLineIdx = i;
-                    player.currentTime = item.time / 1000;
-                    if (!manualEditingMode && player.paused) player.play();
-                });
-                content.appendChild(div);
-            });
-        }
-
-        manualEditingModeToggle?.addEventListener('change', () => {
-            manualEditingMode = !!manualEditingModeToggle.checked;
-            if (manualEditingMode) {
-                player.pause();
-                setStatus('Editing mode enabled. Playback auto-start is disabled.', false);
-            } else {
-                setStatus('Editing mode disabled.', false);
-            }
-        });
-
-        // ─── Tab switching ───
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-                tab.classList.add('active');
-                document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
-            });
-        });
-
-        // ─── Status helpers ───
-        function setStatus(msg, loading = false) {
-            statusTxt.textContent = msg;
-            statusBar.classList.toggle('loading', loading);
-        }
-
-        btnSyncDownload?.addEventListener('click', () => {
-            if (!lastSyncZipBlob) return;
-            offerDownload(lastSyncZipBlob, lastSyncZipFileName);
-            setStatus('Downloaded synced ZIP.', false);
-        });
-
-        btnCopyTimestamped?.addEventListener('click', async () => {
-            const text = timestampedLyricsOutput?.value?.trim();
-            if (!text) return;
-            const ok = await copyTextToClipboard(text);
-            setStatus(ok ? 'Timestamped lyrics copied to clipboard.' : 'Could not copy lyrics automatically.', false);
-        });
-
-        // ─── Enable sync button when both files selected ───
-        let lyricsMode = 'file';
-
-        function checkAutoReady() {
-            const hasLyrics = lyricsMode === 'file'
-                ? autoLyricsFile.files.length > 0
-                : autoLyricsText.value.trim().length > 0;
-            btnSync.disabled = !(autoAudio.files.length && hasLyrics);
-        }
-
-        function activatePasteTextMode(prefillText = '') {
-            if (prefillText) {
-                autoLyricsText.value = prefillText;
-            }
-
-            const textRadio = document.querySelector('input[name="lyrics-source"][value="text"]');
-            if (textRadio) {
-                textRadio.checked = true;
-            }
-
-            lyricsMode = 'text';
-            autoLyricsFile.classList.add('hidden');
-            autoLyricsText.classList.remove('hidden');
-            autoLyricsFile.value = '';
-            checkAutoReady();
-        }
-
-        function lrcToPlainText(lrcText = '') {
-            return lrcText
-                .split('\n')
-                .map(line => line.replace(/^\s*\[\d+:\d{2}(?:\.\d+)?\]\s*/, '').trim())
-                .filter(Boolean)
-                .join('\n');
-        }
-
-        autoAudio.addEventListener('change', checkAutoReady);
-        autoLyricsFile.addEventListener('change', checkAutoReady);
-        autoLyricsText.addEventListener('input', checkAutoReady);
-
-        // ─── Extract embedded lyrics when MP3 is chosen ───
-        autoAudio.addEventListener('change', async () => {
-            const file = autoAudio.files[0];
-            embeddedWrap.classList.add('hidden');
-            embedLrcText.value = '';
-            if (!file) return;
-
-            embedStatusText.style.color = '#888';
-            embedStatusText.textContent = '🔍 Checking for embedded lyrics…';
-            embeddedWrap.classList.remove('hidden');
-
-            try {
-                const form = new FormData();
-                form.append('mp3', file);
-                const resp = await fetch('/lyrics/from-mp3', { method: 'POST', body: form });
-                if (!resp.ok) {
-                    embedStatusText.style.color = '#f88';
-                    embedStatusText.textContent = '⚠️ Could not read embedded lyrics.';
-                    return;
-                }
-                const data = await resp.json();
-                const found = data.sources && (data.sources.uslt || data.sources.txxx_lyrics || data.sources.sylt);
-                if (!found || (!data.plain_lyrics && !data.timed_lyrics_lrc)) {
-                    embedStatusText.style.color = '#888';
-                    embedStatusText.textContent = 'ℹ️ No embedded lyrics found.';
-                    timedLrcPanel.classList.add('hidden');
-                    return;
-                }
-
-                // Build source label
-                const srcNames = [];
-                if (data.sources.uslt) srcNames.push('USLT');
-                if (data.sources.txxx_lyrics) srcNames.push('TXXX');
-                if (data.sources.sylt) srcNames.push('SYLT');
-                embedStatusText.style.color = '#8f8';
-                embedStatusText.textContent = `✅ Found embedded lyrics (${srcNames.join('/')}).`;
-
-                // Show timed LRC panel if available
-                if (data.timed_lyrics_lrc) {
-                    embedLrcText.value = data.timed_lyrics_lrc;
-                    timedLrcPanel.classList.remove('hidden');
-                } else {
-                    timedLrcPanel.classList.add('hidden');
-                }
-
-                // Always switch to paste-text mode when lyrics were extracted.
-                // If plain lyrics are missing, derive readable plain text from timed LRC.
-                const extractedPlain = (data.plain_lyrics && data.plain_lyrics.trim())
-                    ? data.plain_lyrics
-                    : lrcToPlainText(data.timed_lyrics_lrc || '');
-                activatePasteTextMode(extractedPlain);
-            } catch (e) {
-                embedStatusText.style.color = '#f88';
-                embedStatusText.textContent = '⚠️ Error checking embedded lyrics.';
-                console.error(e);
-            }
-        });
-
-        lyricsSource.forEach(radio => {
-            radio.addEventListener('change', () => {
-                lyricsMode = radio.value;
-                const usingFile = lyricsMode === 'file';
-                autoLyricsFile.classList.toggle('hidden', !usingFile);
-                autoLyricsText.classList.toggle('hidden', usingFile);
-                if (usingFile) autoLyricsText.value = '';
-                else autoLyricsFile.value = '';
-                checkAutoReady();
-            });
-        });
-
-        // ─── AUTO-SYNC: Call the API ───
-        btnSync.addEventListener('click', async () => {
-            const mp3File = autoAudio.files[0];
-            const lyricPayload = lyricsMode === 'file'
-                ? autoLyricsFile.files[0]
-                : new Blob([autoLyricsText.value], { type: 'text/plain' });
-            if (!mp3File || !lyricPayload) return;
-
-            btnSync.disabled = true;
-            setStatus('Uploading and syncing… this may take a minute.', true);
-            setSyncNoteBusy(true);
-            if (btnSyncDownload) btnSyncDownload.disabled = true;
-            if (btnCopyTimestamped) btnCopyTimestamped.disabled = true;
-            if (syncResultPanel) syncResultPanel.classList.remove('ready');
-
-            try {
-                const form = new FormData();
-                form.append('mp3', mp3File);
-                form.append('lyrics', lyricPayload, lyricsMode === 'file' ? lyricPayload.name || 'lyrics.txt' : 'lyrics.txt');
-                form.append('embed_mode', document.querySelector('input[name="embed-mode"]:checked').value);
-
-                const resp = await fetch('/sync', { method: 'POST', body: form });
-
-                if (!resp.ok) {
-                    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-                    throw new Error(err.detail || 'Sync failed');
-                }
-
-                setStatus('Processing response…', true);
-
-                // Response is a ZIP containing _synced.mp3 and _synced.lrc
-                const blob = await resp.blob();
-                const zip  = await loadZip(blob);
-
-                // Find the files in the ZIP
-                let mp3Blob = null, lrcText = null;
-                for (const [name, data] of zip) {
-                    if (name.endsWith('.mp3')) mp3Blob = data;
-                    if (name.endsWith('.lrc')) lrcText = await data.text();
-                }
-
-                if (!mp3Blob || !lrcText) throw new Error('ZIP missing expected files');
-
-                // Load audio
-                player.src = URL.createObjectURL(mp3Blob);
-
-                // Store result for manual download and copy workflow.
-                lastSyncZipBlob = blob;
-                lastSyncZipFileName = mp3File.name.replace('.mp3', '_synced.zip');
-                if (syncResultPanel) syncResultPanel.classList.remove('hidden');
-                if (timestampedLyricsOutput) {
-                    timestampedLyricsOutput.value = lrcText;
-                }
-                if (btnSyncDownload) btnSyncDownload.disabled = false;
-                if (btnCopyTimestamped) btnCopyTimestamped.disabled = !lrcText.trim();
-                if (syncResultPanel) syncResultPanel.classList.add('ready');
-
-                // Parse LRC and display
-                parseLrc(lrcText);
-
-                setStatus(`✅ Synced! ${syncMap.length} lines aligned. Press play.`, false);
-
-            } catch (err) {
-                setStatus(`❌ Error: ${err.message}`, false);
-                console.error(err);
-            } finally {
-                btnSync.disabled = false;
-                checkAutoReady();
-                setSyncNoteBusy(false);
-            }
-        });
-
-        // ─── MANUAL: Load local files ───
-        manualAudio.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) {
-                player.src = URL.createObjectURL(file);
-                setStatus('Audio loaded. Paste LRC text next.', false);
-            }
-        });
-
-        manualLrcText.addEventListener('input', (e) => {
-            const text = e.target.value;
-            if (!text.trim()) {
-                setStatus('Awaiting LRC text…', false);
-                syncMap = [];
-                selectedLineIdx = -1;
-                content.innerHTML = '<div class="lyric-line active">Waiting for LRC text...</div>';
-                return;
-            }
-            parseLrc(text);
-            setStatus(`✅ LRC text loaded: ${syncMap.length} lines. Press play.`, false);
-        });
-
-        btnManualSetCurrent?.addEventListener('click', () => {
-            if (!syncMap.length) return;
-            const idx = selectedLineIdx >= 0 ? selectedLineIdx : Math.max(0, lastActive);
-            const nowMs = Math.max(0, Math.round(player.currentTime * 1000));
-            syncMap[idx].time = nowMs;
-            updateManualTextareaFromSyncMap();
-            parseLrc(manualLrcText.value);
-            selectedLineIdx = idx;
-            setStatus(`Updated line ${idx + 1} to ${formatLrcTimestamp(nowMs)}.`, false);
-        });
-
-        btnManualNudgeBack?.addEventListener('click', () => {
-            if (!syncMap.length) return;
-            const idx = selectedLineIdx >= 0 ? selectedLineIdx : Math.max(0, lastActive);
-            syncMap[idx].time = Math.max(0, syncMap[idx].time - 100);
-            updateManualTextareaFromSyncMap();
-            parseLrc(manualLrcText.value);
-            selectedLineIdx = idx;
-            setStatus(`Nudged line ${idx + 1} by -100ms.`, false);
-        });
-
-        btnManualNudgeForward?.addEventListener('click', () => {
-            if (!syncMap.length) return;
-            const idx = selectedLineIdx >= 0 ? selectedLineIdx : Math.max(0, lastActive);
-            syncMap[idx].time = Math.max(0, syncMap[idx].time + 100);
-            updateManualTextareaFromSyncMap();
-            parseLrc(manualLrcText.value);
-            selectedLineIdx = idx;
-            setStatus(`Nudged line ${idx + 1} by +100ms.`, false);
-        });
-
-        btnManualExport?.addEventListener('click', () => {
-            if (!syncMap.length) return;
-            const lrcText = serializeSyncMapToLrc() + '\n';
-            const blob = new Blob([lrcText], { type: 'text/plain;charset=utf-8' });
-            offerDownload(blob, 'manual_fixed.lrc');
-            setStatus('Downloaded fixed LRC.', false);
-        });
-
-        btnManualUseInput?.addEventListener('click', () => {
-            if (!syncMap.length) {
-                setStatus('No fixed LRC lines available to use as input.', false);
-                return;
-            }
-
-            // Use the edited timestamped lines as lyric text input for sync.
-            autoLyricsText.value = syncMap.map(item => item.text).join('\n');
-            const textRadio = document.querySelector('input[name="lyrics-source"][value="text"]');
-            if (textRadio) {
-                textRadio.checked = true;
-                lyricsMode = 'text';
-                autoLyricsFile.classList.add('hidden');
-                autoLyricsText.classList.remove('hidden');
-                autoLyricsFile.value = '';
-            }
-
-            // Move user to Auto Sync tab.
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            const autoTab = document.querySelector('.tab[data-tab="auto"]');
-            if (autoTab) autoTab.classList.add('active');
-            document.getElementById('tab-auto')?.classList.add('active');
-
-            checkAutoReady();
-            setStatus('Fixed lyrics copied to Auto Sync input. Select MP3 (if needed) and run sync.', false);
-        });
-
-        // ─── LRC Parser ───
-        function parseLrc(raw) {
-            syncMap = [];
-            selectedLineIdx = -1;
-            raw.split('\n').forEach(line => {
-                const match = line.match(/\[(\d+):(\d+\.?\d*)\](.*)/);
-                if (match) {
-                    const ms = (parseInt(match[1]) * 60 + parseFloat(match[2])) * 1000;
-                    const text = match[3].trim();
-                    if (text) syncMap.push({ time: ms, text });
-                }
-            });
-            renderSyncMapLines();
-        }
-
-        // ─── Sync Engine ───
-        let lastActive = -1;
-        player.addEventListener('timeupdate', () => {
-            if (manualEditingMode) {
-                return;
-            }
-
-            const now = player.currentTime * 1000;
-            let activeIdx = -1;
-
-            for (let i = syncMap.length - 1; i >= 0; i--) {
-                if (now >= syncMap[i].time) { activeIdx = i; break; }
-            }
-
-            if (activeIdx !== lastActive) {
-                lastActive = activeIdx;
-                document.querySelectorAll('.lyric-line').forEach(el => el.classList.remove('active'));
-                if (activeIdx >= 0) {
-                    const activeEl = document.getElementById(`line-${activeIdx}`);
-                    if (activeEl) {
-                        activeEl.classList.add('active');
-                        const targetScroll = activeEl.offsetTop - (windowEl.offsetHeight / 2);
-                        windowEl.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
-                    }
-                }
-            }
-        });
-
-        // ─── Minimal ZIP reader (no external lib needed) ───
-        async function loadZip(blob) {
-            const buf  = await blob.arrayBuffer();
-            const view = new DataView(buf);
-            const entries = [];
-            let offset = 0;
-
-            while (offset < buf.byteLength - 4) {
-                const sig = view.getUint32(offset, true);
-                if (sig !== 0x04034b50) break; // local file header
-
-                const compMethod  = view.getUint16(offset + 8, true);
-                const compSize    = view.getUint32(offset + 18, true);
-                const uncompSize  = view.getUint32(offset + 22, true);
-                const nameLen     = view.getUint16(offset + 26, true);
-                const extraLen    = view.getUint16(offset + 28, true);
-                const nameBytes   = new Uint8Array(buf, offset + 30, nameLen);
-                const fileName    = new TextDecoder().decode(nameBytes);
-                const dataStart   = offset + 30 + nameLen + extraLen;
-                const fileData    = buf.slice(dataStart, dataStart + compSize);
-
-                if (compMethod === 0) {
-                    // Stored (no compression)
-                    entries.push([fileName, new Blob([fileData])]);
-                } else if (compMethod === 8) {
-                    // Deflated — use DecompressionStream
-                    const ds = new DecompressionStream('deflate-raw');
-                    const writer = ds.writable.getWriter();
-                    writer.write(new Uint8Array(fileData));
-                    writer.close();
-                    const decompressed = await new Response(ds.readable).blob();
-                    entries.push([fileName, decompressed]);
-                } else {
-                    console.warn(`Unsupported compression method ${compMethod} for ${fileName}`);
-                }
-
-                offset = dataStart + compSize;
-            }
-            return entries;
-        }
-
-        // ─── Offer download ───
-        function offerDownload(blob, fileName) {
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = fileName;
-            a.click();
-            URL.revokeObjectURL(a.href);
-        }
-    </script>
+    <!-- Master ES Module Entry -->
+    <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

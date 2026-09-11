@@ -398,10 +398,26 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 
-# ─── Serve index.html at root ───
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+# ─── Serve index.html and static assets ───
 @app.get("/", include_in_schema=False)
 async def root():
-    return FileResponse("/app/app/static/index.html")
+    index_file = STATIC_DIR / "index.html"
+    if not index_file.is_file():
+        raise HTTPException(status_code=404, detail="index.html not found")
+    return FileResponse(index_file, headers={"Cache-Control": "no-cache, must-revalidate"})
+
+
+@app.get("/static/{file_path:path}", include_in_schema=False)
+async def serve_static(file_path: str):
+    target = (STATIC_DIR / file_path).resolve()
+    if not str(target).startswith(str(STATIC_DIR.resolve())):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(target, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 # ─── All your existing endpoints below (unchanged) ───
