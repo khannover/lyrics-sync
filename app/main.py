@@ -296,7 +296,7 @@ def _ensure_taggable_mp3(input_path: Path, job_dir: Path) -> Path:
         "-b:a", "192k",
         str(normalized_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     if result.returncode != 0 or not normalized_path.exists():
         raise HTTPException(
             status_code=400,
@@ -469,7 +469,7 @@ async def sync_lyrics(
         with open(lyrics_path, "wb") as f:
             shutil.copyfileobj(lyrics.file, f)
 
-        lyrics_text = lyrics_path.read_text(encoding="utf-8").strip()
+        lyrics_text = lyrics_path.read_text(encoding="utf-8", errors="replace").strip()
         if not lyrics_text:
             raise HTTPException(status_code=400, detail="Lyrics file is empty.")
 
@@ -559,7 +559,7 @@ async def enqueue_sync_job(
 
         with open(lyrics_path, "wb") as f:
             shutil.copyfileobj(lyrics.file, f)
-        if not lyrics_path.read_text(encoding="utf-8").strip():
+        if not lyrics_path.read_text(encoding="utf-8", errors="replace").strip():
             raise HTTPException(status_code=400, detail="Lyrics file is empty.")
 
         job = create_job(
@@ -652,7 +652,7 @@ async def sync_lyrics_mp3_only(
         with open(lyrics_path, "wb") as f:
             shutil.copyfileobj(lyrics.file, f)
 
-        lyrics_text = lyrics_path.read_text(encoding="utf-8").strip()
+        lyrics_text = lyrics_path.read_text(encoding="utf-8", errors="replace").strip()
         if not lyrics_text:
             raise HTTPException(status_code=400, detail="Lyrics file is empty.")
 

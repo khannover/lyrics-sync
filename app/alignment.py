@@ -157,7 +157,7 @@ def _convert_to_wav(mp3_path: str, job_dir: str, job_id: Optional[str] = None) -
         "ffmpeg", "-y", "-i", mp3_path,
         "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg failed: {result.stderr}")
     elapsed = time.monotonic() - started
@@ -280,7 +280,7 @@ def _get_audio_duration_ms(audio_path: str) -> int:
         audio_path,
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
         if result.returncode != 0:
             return 0
         return int(float(result.stdout.strip()) * 1000)

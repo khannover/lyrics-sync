@@ -79,7 +79,7 @@ def _get_classifier_session():
 
     logger.info("Initializing ONNX genre classifier from %s ...", onnx_path)
     try:
-        meta = json.loads(json_path.read_text(encoding="utf-8"))
+        meta = json.loads(json_path.read_text(encoding="utf-8", errors="replace"))
         _classes = meta.get("classes", [])
 
         opts = ort.SessionOptions()

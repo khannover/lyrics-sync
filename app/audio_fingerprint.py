@@ -48,6 +48,7 @@ def generate_audio_fingerprint(
             [fpcalc_bin, "-json", audio_path],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=timeout_sec,
             check=False,
         )

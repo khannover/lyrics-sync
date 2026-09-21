@@ -98,7 +98,7 @@ def load_persisted_jobs() -> int:
         return restored
     for metadata in WORK_DIR.glob("*/job.json"):
         try:
-            data = json.loads(metadata.read_text(encoding="utf-8"))
+            data = json.loads(metadata.read_text(encoding="utf-8", errors="replace"))
             job = SyncJob(
                 job_id=str(data["job_id"]),
                 track_id=str(data["track_id"]),
@@ -300,7 +300,7 @@ async def run_job(job: SyncJob) -> None:
     mp3_path = job.job_dir / "input.mp3"
     mp3_path = _ensure_taggable_mp3(mp3_path, job.job_dir)
     lyrics_path = job.job_dir / "lyrics.txt"
-    lyrics_text = lyrics_path.read_text(encoding="utf-8").strip()
+    lyrics_text = lyrics_path.read_text(encoding="utf-8", errors="replace").strip()
     if not lyrics_text:
         raise ValueError("Lyrics file is empty")
 
