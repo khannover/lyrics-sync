@@ -913,6 +913,7 @@ def _build_candidate_result(
         warnings.append("Progressive alignment fallback used after low DTW diversity.")
         structured = _align_lines_progressive(lyrics_lines, whisper_words)
         unique_ratio, coverage_ratio, max_ts = _summarize_line_metrics(structured.lines, duration_ms)
+        non_marker_ts = [ts for line, ts in structured.lines if not _is_marker(line) and _normalize(line)]
 
     if duration_ms > 0 and len(non_marker_ts) > 6 and (unique_ratio < 0.45 or max_ts < int(duration_ms * 0.25)):
         logger.warning(
