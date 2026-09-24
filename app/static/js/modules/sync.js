@@ -222,7 +222,12 @@ export function initSyncModule() {
             }
 
             if (warnings?.length && warningsSection && warningsList) {
-                warningsList.innerHTML = warnings.map(w => `<li>${w}</li>`).join('');
+                warningsList.innerHTML = '';
+                warnings.forEach(warning => {
+                    const item = document.createElement('li');
+                    item.textContent = warning;
+                    warningsList.appendChild(item);
+                });
                 warningsSection.classList.remove('hidden');
             }
 

@@ -22,6 +22,10 @@ def test_tokenize_handles_mixed_script_text():
     assert "ส" in tokens
 
 
+def test_tokenize_keeps_hangul_words_grouped():
+    assert _tokenize("안녕 세상") == ["안녕", "세상"]
+
+
 def test_align_lines_to_words_returns_word_timings():
     result = _align_lines_to_words(
         ["Hello world"],

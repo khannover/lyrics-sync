@@ -284,7 +284,7 @@ def _tokenize(text: str) -> List[str]:
         if ch.isspace():
             flush()
             continue
-        if family in {"hiragana", "katakana", "cjk", "hangul", "thai", "khmer"}:
+        if family in {"hiragana", "katakana", "cjk", "thai", "khmer"}:
             flush()
             tokens.append(ch)
             continue
@@ -374,7 +374,7 @@ def _detect_language_hint(lyrics_text: Optional[str]) -> Optional[str]:
         candidates.append("fr")
     if any(w in lower for w in [" che ", " il ", " un ", " non ", " per "]):
         candidates.append("it")
-    if any(w in lower for w in [" não ", " você ", " com ", " uma ", " para "]):
+    if any(w in lower for w in [" não ", " você ", " vocês ", " coração ", " também "]):
         candidates.append("pt")
 
     candidates = list(dict.fromkeys(candidates))
