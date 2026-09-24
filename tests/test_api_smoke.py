@@ -1,6 +1,9 @@
 """Lightweight FastAPI smoke tests (no Whisper / alignment)."""
 
+import io
+import json
 import uuid
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -166,6 +169,20 @@ def test_sync_rejects_invalid_embed_mode():
     assert "embed_mode" in response.json()["detail"]
 
 
+def test_sync_rejects_invalid_timestamp_mode():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync",
+            files={
+                "mp3": ("track.mp3", b"fake-audio", "audio/mpeg"),
+                "lyrics": ("lyrics.txt", b"line one", "text/plain"),
+            },
+            data={"timestamp_mode": "banana"},
+        )
+    assert response.status_code == 400
+    assert "timestamp_mode" in response.json()["detail"]
+
+
 def test_sync_mp3_only_rejects_non_mp3_extension():
     with TestClient(app) as client:
         response = client.post(
@@ -191,6 +208,20 @@ def test_sync_mp3_only_rejects_invalid_embed_mode():
         )
     assert response.status_code == 400
     assert "embed_mode" in response.json()["detail"]
+
+
+def test_sync_mp3_only_rejects_invalid_timestamp_mode():
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync/mp3-only",
+            files={
+                "mp3": ("track.mp3", b"fake-audio", "audio/mpeg"),
+                "lyrics": ("lyrics.txt", b"line one", "text/plain"),
+            },
+            data={"timestamp_mode": "banana"},
+        )
+    assert response.status_code == 400
+    assert "timestamp_mode" in response.json()["detail"]
 
 
 def test_sync_mp3_only_rejects_empty_mp3():
@@ -286,7 +317,7 @@ def test_sync_returns_sync_quality_headers(monkeypatch):
     import app.main as main
     from app.alignment import AlignmentResult
 
-    async def _fake_alignment(job_id, mp3_path, lyrics_text, job_dir):
+    async def _fake_alignment(job_id, mp3_path, lyrics_text, job_dir, timestamp_mode="line"):
         return AlignmentResult(
             lines=[("hello", 0)],
             quality="good",
@@ -318,7 +349,7 @@ def test_sync_mp3_only_returns_sync_quality_headers(monkeypatch):
     import app.main as main
     from app.alignment import AlignmentResult
 
-    async def _fake_alignment(job_id, mp3_path, lyrics_text, job_dir):
+    async def _fake_alignment(job_id, mp3_path, lyrics_text, job_dir, timestamp_mode="line"):
         return AlignmentResult(
             lines=[("hello", 0)],
             quality="degraded",
@@ -341,6 +372,59 @@ def test_sync_mp3_only_returns_sync_quality_headers(monkeypatch):
     assert response.status_code == 200
     assert response.headers.get("X-Sync-Quality") == "degraded"
     assert response.headers.get("X-Sync-Warning") == "sparse bridge"
+
+
+def test_sync_word_mode_writes_word_sidecar(monkeypatch):
+    from tests.test_sylt_writer import _SILENT_MP3_BYTES
+
+    import app.main as main
+    from app.alignment import AlignmentResult, WordTiming
+
+    async def _fake_alignment(job_id, mp3_path, lyrics_text, job_dir, timestamp_mode="line"):
+        assert timestamp_mode == "word"
+        return AlignmentResult(
+            lines=[("hello world", 1200)],
+            quality="good",
+            warnings=[],
+            report={
+                "quality": "good",
+                "line_count": 1,
+                "duration_ms": 10000,
+                "whisper_word_count": 2,
+                "timestamp_mode": "word",
+            },
+            word_timings=[
+                WordTiming(0, 0, "hello", 1200, 1500, True, 0.91),
+                WordTiming(0, 1, "world", 1520, 1800, True, 0.88),
+            ],
+            detected_language="en",
+            transcription_pass="vad_retry",
+        )
+
+    monkeypatch.setattr(main, "_run_alignment", _fake_alignment)
+    monkeypatch.setattr(main, "write_sylt_tag", lambda *args, **kwargs: None)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync",
+            files={
+                "mp3": ("track.mp3", _SILENT_MP3_BYTES, "audio/mpeg"),
+                "lyrics": ("lyrics.txt", b"hello world", "text/plain"),
+            },
+            data={"timestamp_mode": "word"},
+        )
+
+    assert response.status_code == 200
+    zf = zipfile.ZipFile(io.BytesIO(response.content))
+    report_name = next(name for name in zf.namelist() if name.endswith("_sync_report.json"))
+    words_name = next(name for name in zf.namelist() if name.endswith(".words.json"))
+    report = json.loads(zf.read(report_name).decode("utf-8"))
+    words = json.loads(zf.read(words_name).decode("utf-8"))
+    assert report["timestamp_mode"] == "word"
+    assert words["timestamp_mode"] == "word"
+    assert words["language"] == "en"
+    assert words["transcription_pass"] == "vad_retry"
+    assert words["lines"][0]["words"][0]["word"] == "hello"
 
 
 def test_content_disposition_attachment_ascii_and_utf8():
