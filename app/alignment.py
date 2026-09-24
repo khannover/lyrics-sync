@@ -284,11 +284,11 @@ def _tokenize(text: str) -> List[str]:
         if ch.isspace():
             flush()
             continue
-        if family in {"hiragana", "katakana", "cjk", "thai", "khmer"}:
+        if family in {"hiragana", "katakana", "cjk"}:
             flush()
             tokens.append(ch)
             continue
-        if category.startswith(("L", "N")) or family in {"arabic", "cyrillic", "devanagari", "latin"}:
+        if category.startswith(("L", "N", "M")) or family in {"arabic", "cyrillic", "devanagari", "latin"}:
             buffer.append(ch)
             continue
         if ch in _JOINER_CHARS and buffer:
@@ -1015,14 +1015,11 @@ def align_lyrics_to_audio(
         {"audio_path": wav_path, "beam_size": 5, "vad_filter": True, "pass_name": "vad_retry"},
     ]
 
-    focused_path = _create_vocal_focus_wav(wav_path, job_dir, job_id=job_id)
-    if focused_path:
-        attempts.append(
-            {"audio_path": focused_path, "beam_size": 5, "vad_filter": True, "pass_name": "vocal_focus"}
-        )
-
     candidates: List[AlignmentResult] = []
-    for idx, attempt in enumerate(attempts):
+    vocal_focus_added = False
+    idx = 0
+    while idx < len(attempts):
+        attempt = attempts[idx]
         if idx > 0 and candidates and not _needs_retry(max(candidates, key=_candidate_score)):
             break
         transcription = _transcribe_with_word_timestamps(
@@ -1058,6 +1055,20 @@ def align_lyrics_to_audio(
             quality=candidate.quality,
         )
         candidates.append(candidate)
+        best_candidate = max(candidates, key=_candidate_score)
+        if idx == len(attempts) - 1 and not vocal_focus_added and _needs_retry(best_candidate):
+            focused_path = _create_vocal_focus_wav(wav_path, job_dir, job_id=job_id)
+            if focused_path:
+                attempts.append(
+                    {
+                        "audio_path": focused_path,
+                        "beam_size": 5,
+                        "vad_filter": True,
+                        "pass_name": "vocal_focus",
+                    }
+                )
+                vocal_focus_added = True
+        idx += 1
 
     result = max(candidates, key=_candidate_score) if candidates else _build_candidate_result(
         lyrics_lines,

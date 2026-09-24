@@ -19,7 +19,7 @@ def test_tokenize_handles_mixed_script_text():
     tokens = _tokenize("Hello—世界 สวัสดี")
     assert "Hello" in tokens
     assert "世" in tokens and "界" in tokens
-    assert "ส" in tokens
+    assert "สวัสดี" in tokens
 
 
 def test_tokenize_keeps_hangul_words_grouped():

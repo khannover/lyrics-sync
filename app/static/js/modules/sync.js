@@ -233,7 +233,7 @@ export function initSyncModule() {
 
             if (quality && quality !== 'good') {
                 document.querySelector('.tab-btn[data-tab="editor"]')?.click();
-                setHud(`⚠️ Alignment finished with ${quality}. Review the LRC in Manual Studio.`, 'error');
+                setHud(`⚠️ Alignment finished with ${quality}. Review the LRC in Manual Studio.`, 'normal');
             } else {
                 setHud(`✅ Alignment complete! ${map.length} timestamped lines generated.`, 'success');
             }
