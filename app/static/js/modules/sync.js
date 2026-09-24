@@ -232,8 +232,11 @@ export function initSyncModule() {
             }
 
             if (quality && quality !== 'good') {
-                document.querySelector('.tab-btn[data-tab="editor"]')?.click();
                 setHud(`⚠️ Alignment finished with ${quality}. Review the LRC in Manual Studio.`, 'normal');
+                if (resultsSummary) {
+                    const existing = resultsSummary.textContent ? `${resultsSummary.textContent} • ` : '';
+                    resultsSummary.textContent = `${existing}manual review recommended`;
+                }
             } else {
                 setHud(`✅ Alignment complete! ${map.length} timestamped lines generated.`, 'success');
             }

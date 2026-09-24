@@ -269,7 +269,7 @@ def _word_level_sylt_entries(alignment: AlignmentResult) -> list[tuple[str, int]
     entries: list[tuple[str, int]] = []
     for timing in sorted(alignment.word_timings, key=lambda item: (item.line_index, item.word_index)):
         word = (timing.word or "").strip()
-        if word:
+        if word and timing.matched and int(timing.start_ms) > 0:
             entries.append((word, int(timing.start_ms)))
     return entries
 
