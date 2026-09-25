@@ -115,6 +115,7 @@ Upload an MP3 and a lyrics file to perform forced alignment. Returns a `.zip` ar
 - `<track>_synced.mp3`: MP3 tagged with ID3 SYLT synchronized lyrics.
 - `<track>_synced.lrc`: Standard LRC timed lyrics file.
 - `<track>_sync_report.json`: Alignment quality metrics, line count, warnings, and duration.
+- `<track>_synced.words.json`: Optional word-level timing sidecar when `timestamp_mode=word`.
 
 **Parameters (multipart/form-data):**
 - `mp3` (file, required): MP3 audio file.
@@ -122,6 +123,9 @@ Upload an MP3 and a lyrics file to perform forced alignment. Returns a `.zip` ar
 - `embed_mode` (string, optional, default: `"overwrite"`):
   - `"overwrite"`: Overwrites existing SYLT, USLT, and TXXX:LYRICS frames with LRC-timestamped text.
   - `"sylt_only"`: Adds/updates only the SYLT frame without touching existing plain USLT/TXXX lyrics.
+- `timestamp_mode` (string, optional, default: `"line"`):
+  - `"line"`: Standard line-level sync output.
+  - `"word"`: Keeps line-level LRC output, writes word-level SYLT entries, and adds `*_synced.words.json`.
 
 **Response Headers:**
 - `X-Sync-Quality`: `"good"` | `"degraded"` | `"fallback"`
@@ -145,6 +149,7 @@ Same alignment process as `/sync`, but returns the synchronized MP3 file directl
 - `mp3` (file, required): MP3 audio file.
 - `lyrics` (file, required): Plain-text lyrics file (UTF-8).
 - `embed_mode` (string, optional, default: `"overwrite"`): `"overwrite"` or `"sylt_only"`.
+- `timestamp_mode` (string, optional, default: `"line"`): `"line"` or `"word"`; word mode writes word-level SYLT timestamps into the returned MP3.
 
 **Response Headers:**
 - `X-Sync-Quality`: `"good"` | `"degraded"` | `"fallback"`

@@ -135,6 +135,7 @@ async def _run_alignment(
     mp3_path: Path,
     lyrics_text: str,
     job_dir: Path,
+    timestamp_mode: str = "line",
 ) -> AlignmentResult:
     global waiting_jobs, alignment_active
     lyrics_text, prompt_found = strip_style_preamble(lyrics_text)
@@ -174,6 +175,7 @@ async def _run_alignment(
                     lyrics_text,
                     job_dir=str(job_dir),
                     job_id=job_id,
+                    timestamp_mode=timestamp_mode,
                 )
                 _job_log(
                     job_id,
@@ -261,6 +263,54 @@ def _content_disposition_attachment(filename: str) -> str:
     # RFC 5987 encoding for full UTF-8 filename support.
     utf8_encoded = quote(filename, safe="")
     return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
+
+
+def _word_level_sylt_entries(alignment: AlignmentResult) -> list[tuple[str, int]]:
+    entries: list[tuple[str, int]] = []
+    for timing in sorted(alignment.word_timings, key=lambda item: (item.line_index, item.word_index)):
+        word = (timing.word or "").strip()
+        if word and timing.matched and int(timing.start_ms) >= 0:
+            entries.append((word, int(timing.start_ms)))
+    return entries
+
+
+def _build_word_sidecar_payload(alignment: AlignmentResult) -> dict:
+    grouped: dict[int, list[dict]] = {}
+    for timing in sorted(alignment.word_timings, key=lambda item: (item.line_index, item.word_index)):
+        grouped.setdefault(timing.line_index, []).append(
+            {
+                "word_index": timing.word_index,
+                "word": timing.word,
+                "start_ms": int(timing.start_ms),
+                "end_ms": int(timing.end_ms),
+                "matched": bool(timing.matched),
+                "confidence": timing.confidence,
+            }
+        )
+
+    lines = []
+    for line_index, (text, start_ms) in enumerate(alignment.lines):
+        words = grouped.get(line_index, [])
+        line_start = min((word["start_ms"] for word in words), default=int(start_ms))
+        lines.append(
+            {
+                "line_index": line_index,
+                "text": text,
+                "start_ms": line_start,
+                "words": words,
+            }
+        )
+
+    report = alignment.report or {}
+    return {
+        "version": 1,
+        "timestamp_mode": "word",
+        "language": alignment.detected_language or report.get("language") or "unknown",
+        "transcription_pass": alignment.transcription_pass,
+        "quality": alignment.quality,
+        "warnings": list(alignment.warnings),
+        "lines": lines,
+    }
 
 
 def _mp3_upload_stem(original_filename: str) -> str:
@@ -432,11 +482,17 @@ async def sync_lyrics(
         default="overwrite",
         description='Embedding mode: "overwrite" overwrites USLT/TXXX with LRC-timestamped text; "sylt_only" adds only the SYLT frame without touching plain lyrics.',
     ),
+    timestamp_mode: str = Form(
+        default="line",
+        description='Timestamp precision: "line" keeps current line sync, "word" also emits word-level timing sidecar and writes word-level SYLT.',
+    ),
 ):
     if not mp3.filename.lower().endswith(".mp3"):
         raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
     if embed_mode not in ("overwrite", "sylt_only"):
         raise HTTPException(status_code=400, detail='embed_mode must be "overwrite" or "sylt_only".')
+    if timestamp_mode not in ("line", "word"):
+        raise HTTPException(status_code=400, detail='timestamp_mode must be "line" or "word".')
 
     job_id = str(uuid.uuid4())
     job_dir = WORK_DIR / job_id
@@ -453,6 +509,7 @@ async def sync_lyrics(
             client=client_ip,
             file=mp3.filename,
             embed_mode=embed_mode,
+            timestamp_mode=timestamp_mode,
         )
 
         mp3_path = job_dir / "input.mp3"
@@ -473,8 +530,9 @@ async def sync_lyrics(
         if not lyrics_text:
             raise HTTPException(status_code=400, detail="Lyrics file is empty.")
 
-        alignment = await _run_alignment(job_id, mp3_path, lyrics_text, job_dir)
+        alignment = await _run_alignment(job_id, mp3_path, lyrics_text, job_dir, timestamp_mode=timestamp_mode)
         synced = alignment.lines
+        sylt_entries = _word_level_sylt_entries(alignment) if timestamp_mode == "word" else []
 
         base_name = _mp3_upload_stem(mp3.filename or "track.mp3")
         output_mp3 = job_dir / f"{base_name}_synced.mp3"
@@ -482,7 +540,12 @@ async def sync_lyrics(
 
         _job_log(job_id, "stage=tagging_start", file=mp3_path.name)
         shutil.copy2(mp3_path, output_mp3)
-        write_sylt_tag(str(output_mp3), synced, embed_mode=embed_mode)
+        write_sylt_tag(
+            str(output_mp3),
+            synced,
+            sylt_lyrics=sylt_entries or None,
+            embed_mode=embed_mode,
+        )
         write_lrc_file(str(output_lrc), synced)
         response_headers = {
             "Content-Disposition": _content_disposition_attachment(f"{base_name}_synced.zip"),
@@ -500,6 +563,11 @@ async def sync_lyrics(
                 zf.writestr(
                     f"{base_name}_sync_report.json",
                     json.dumps(alignment.report, ensure_ascii=False),
+                )
+            if timestamp_mode == "word" and alignment.word_timings:
+                zf.writestr(
+                    f"{base_name}_synced.words.json",
+                    json.dumps(_build_word_sidecar_payload(alignment), ensure_ascii=False),
                 )
         zip_buffer.seek(0)
 
@@ -615,11 +683,17 @@ async def sync_lyrics_mp3_only(
         default="overwrite",
         description='Embedding mode: "overwrite" overwrites USLT/TXXX with LRC-timestamped text; "sylt_only" adds only the SYLT frame without touching plain lyrics.',
     ),
+    timestamp_mode: str = Form(
+        default="line",
+        description='Timestamp precision: "line" keeps current line sync, "word" writes word-level SYLT.',
+    ),
 ):
     if not mp3.filename.lower().endswith(".mp3"):
         raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
     if embed_mode not in ("overwrite", "sylt_only"):
         raise HTTPException(status_code=400, detail='embed_mode must be "overwrite" or "sylt_only".')
+    if timestamp_mode not in ("line", "word"):
+        raise HTTPException(status_code=400, detail='timestamp_mode must be "line" or "word".')
 
     job_id = str(uuid.uuid4())
     job_dir = WORK_DIR / job_id
@@ -636,6 +710,7 @@ async def sync_lyrics_mp3_only(
             client=client_ip,
             file=mp3.filename,
             embed_mode=embed_mode,
+            timestamp_mode=timestamp_mode,
         )
 
         mp3_path = job_dir / "input.mp3"
@@ -656,13 +731,19 @@ async def sync_lyrics_mp3_only(
         if not lyrics_text:
             raise HTTPException(status_code=400, detail="Lyrics file is empty.")
 
-        alignment = await _run_alignment(job_id, mp3_path, lyrics_text, job_dir)
+        alignment = await _run_alignment(job_id, mp3_path, lyrics_text, job_dir, timestamp_mode=timestamp_mode)
         synced = alignment.lines
+        sylt_entries = _word_level_sylt_entries(alignment) if timestamp_mode == "word" else []
 
         output_path = job_dir / "output.mp3"
         _job_log(job_id, "stage=tagging_start", file=mp3_path.name)
         shutil.copy2(mp3_path, output_path)
-        write_sylt_tag(str(output_path), synced, embed_mode=embed_mode)
+        write_sylt_tag(
+            str(output_path),
+            synced,
+            sylt_lyrics=sylt_entries or None,
+            embed_mode=embed_mode,
+        )
         _job_log(job_id, "stage=tagging_done", file=mp3_path.name)
 
         _job_log(

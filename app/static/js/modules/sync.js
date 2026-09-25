@@ -28,6 +28,9 @@ export function initSyncModule() {
 
     const resultsCard = document.getElementById('sync-results-card');
     const ratingBadge = document.getElementById('sync-rating-badge');
+    const resultsSummary = document.getElementById('sync-results-summary');
+    const warningsSection = document.getElementById('sync-warnings-section');
+    const warningsList = document.getElementById('sync-warnings-list');
     const btnDownloadZip = document.getElementById('btn-download-sync-zip');
     const btnCopyLrc = document.getElementById('btn-copy-sync-lrc');
 
@@ -171,13 +174,17 @@ export function initSyncModule() {
         const isTextMode = sourceTextRadio.checked;
         const lyricsPayload = isTextMode ? lyricsTextInput.value.trim() : loadedLyricsFile;
         const embedMode = document.querySelector('input[name="embed-mode"]:checked')?.value || 'overwrite';
+        const timestampMode = document.querySelector('input[name="timestamp-mode"]:checked')?.value || 'line';
 
         btnStartSync.disabled = true;
         setHud('Uploading audio & computing Whisper acoustic alignment…', 'busy');
         resultsCard.classList.add('hidden');
+        warningsSection?.classList.add('hidden');
+        if (warningsList) warningsList.innerHTML = '';
 
         try {
-            const { zipBlob, mp3Blob, lrcText } = await syncLyrics(loadedAudioFile, lyricsPayload, embedMode);
+            const { zipBlob, mp3Blob, lrcText, reportData, wordsData, quality, warnings } =
+                await syncLyrics(loadedAudioFile, lyricsPayload, embedMode, timestampMode);
             lastZipBlob = zipBlob;
             lastLrcText = lrcText;
 
@@ -189,9 +196,50 @@ export function initSyncModule() {
             const map = parseLrc(lrcText);
             state.set('syncMap', map);
             state.set('currentLrcText', lrcText);
+            state.set('syncResults', { zipBlob, mp3Blob, lrcText, reportData, wordsData, quality, warnings });
 
             resultsCard.classList.remove('hidden');
-            setHud(`✅ Alignment complete! ${map.length} timestamped lines generated.`, 'success');
+            if (ratingBadge) {
+                const qualityLabel = String(quality || 'unknown').toLowerCase();
+                ratingBadge.textContent = qualityLabel.toUpperCase();
+                ratingBadge.className = 'card-badge '
+                    + (qualityLabel === 'good'
+                        ? 'card-badge--emerald'
+                        : qualityLabel === 'degraded'
+                            ? 'card-badge--amber'
+                            : 'card-badge--coral');
+            }
+
+            if (resultsSummary) {
+                const extras = [];
+                if (reportData?.transcription_pass) extras.push(`pass=${reportData.transcription_pass}`);
+                if (reportData?.word_match_ratio != null) extras.push(`match=${Math.round(reportData.word_match_ratio * 100)}%`);
+                if (reportData?.coverage_ratio != null) extras.push(`coverage=${Math.round(reportData.coverage_ratio * 100)}%`);
+                if (wordsData?.lines?.length) extras.push(`word-sidecar=${wordsData.lines.length} lines`);
+                resultsSummary.textContent = extras.length
+                    ? extras.join(' • ')
+                    : `${map.length} timestamped lines generated.`;
+            }
+
+            if (warnings?.length && warningsSection && warningsList) {
+                warningsList.innerHTML = '';
+                warnings.forEach(warning => {
+                    const item = document.createElement('li');
+                    item.textContent = warning;
+                    warningsList.appendChild(item);
+                });
+                warningsSection.classList.remove('hidden');
+            }
+
+            if (quality && quality !== 'good') {
+                setHud(`⚠️ Alignment finished with ${quality}. Review the LRC in Manual Studio.`, 'normal');
+                if (resultsSummary) {
+                    const existing = resultsSummary.textContent ? `${resultsSummary.textContent} • ` : '';
+                    resultsSummary.textContent = `${existing}manual review recommended`;
+                }
+            } else {
+                setHud(`✅ Alignment complete! ${map.length} timestamped lines generated.`, 'success');
+            }
 
         } catch (err) {
             setHud(`❌ Alignment error: ${err.message}`, 'error');

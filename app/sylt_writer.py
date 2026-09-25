@@ -40,6 +40,7 @@ def format_lrc(synced_lyrics: List[Tuple[str, int]]) -> str:
 def write_sylt_tag(
     mp3_path: str,
     synced_lyrics: List[Tuple[str, int]],
+    sylt_lyrics: List[Tuple[str, int]] | None = None,
     lang: str = "eng",
     desc: str = "",
     embed_mode: str = "overwrite",
@@ -76,8 +77,9 @@ def write_sylt_tag(
         del audio.tags[key]
 
     # --- 1. SYLT frame (spec-correct) ---
+    sylt_source = sylt_lyrics if sylt_lyrics is not None else synced_lyrics
     sylt_data = []
-    for text, timestamp_ms in synced_lyrics:
+    for text, timestamp_ms in sylt_source:
         sylt_data.append((text + "\n", timestamp_ms))
 
     # ID3v2.3 does not support UTF-8 text encoding in a fully portable way.

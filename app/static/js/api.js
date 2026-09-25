@@ -51,7 +51,7 @@ export async function analyzeAudio(mp3File, options = {}) {
     return await res.json();
 }
 
-export async function syncLyrics(mp3File, lyricsPayload, embedMode = 'overwrite') {
+export async function syncLyrics(mp3File, lyricsPayload, embedMode = 'overwrite', timestampMode = 'line') {
     const form = new FormData();
     form.append('mp3', mp3File);
 
@@ -68,6 +68,7 @@ export async function syncLyrics(mp3File, lyricsPayload, embedMode = 'overwrite'
 
     form.append('lyrics', lyricsBlob, filename);
     form.append('embed_mode', embedMode);
+    form.append('timestamp_mode', timestampMode);
 
     const res = await fetch('/sync', { method: 'POST', body: form });
     if (!res.ok) {
@@ -77,20 +78,38 @@ export async function syncLyrics(mp3File, lyricsPayload, embedMode = 'overwrite'
 
     const blob = await res.blob();
     const entries = await loadZip(blob);
+    const quality = res.headers.get('X-Sync-Quality') || '';
+    const warningHeader = res.headers.get('X-Sync-Warning') || '';
 
     let mp3Blob = null;
     let lrcText = null;
+    let reportData = null;
+    let wordsData = null;
 
     for (const [name, data] of entries) {
         if (name.endsWith('.mp3')) mp3Blob = data;
         if (name.endsWith('.lrc')) lrcText = await data.text();
+        if (name.endsWith('_sync_report.json')) reportData = JSON.parse(await data.text());
+        if (name.endsWith('.words.json')) wordsData = JSON.parse(await data.text());
     }
 
     if (!mp3Blob || !lrcText) {
         throw new Error('ZIP missing expected synced audio or LRC file');
     }
 
-    return { zipBlob: blob, mp3Blob, lrcText };
+    return {
+        zipBlob: blob,
+        mp3Blob,
+        lrcText,
+        reportData,
+        wordsData,
+        quality: reportData?.quality || quality || 'unknown',
+        warnings: Array.isArray(reportData?.warnings)
+            ? reportData.warnings
+            : warningHeader
+                ? warningHeader.split(';').map(x => x.trim()).filter(Boolean)
+                : [],
+    };
 }
 
 export async function loadZip(blob) {
