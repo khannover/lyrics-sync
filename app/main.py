@@ -83,6 +83,8 @@ SYNC_RATE_LIMIT = os.environ.get("SYNC_RATE_LIMIT", "60/hour")
 SYNC_MP3_ONLY_RATE_LIMIT = os.environ.get("SYNC_MP3_ONLY_RATE_LIMIT", SYNC_RATE_LIMIT)
 # Async job enqueue is cheap (queues work) and idempotent by track_id — allow large libraries.
 SYNC_JOBS_RATE_LIMIT = os.environ.get("SYNC_JOBS_RATE_LIMIT", "1000/hour")
+# Audio profile extraction (metadata, acoustic features, ONNX genre) is lightweight (~1s) — allow large batch ingestion.
+AUDIO_ANALYZE_RATE_LIMIT = os.environ.get("AUDIO_ANALYZE_RATE_LIMIT", "50000/hour")
 
 
 def _configure_logging() -> None:
@@ -956,7 +958,7 @@ async def extract_or_transcribe_lyrics(
     "/audio/analyze",
     summary="Multi-tier audio analysis: metadata, acoustic features, neural genres, copyright fingerprint, and AI provenance",
 )
-@limiter.limit(SYNC_RATE_LIMIT)
+@limiter.limit(AUDIO_ANALYZE_RATE_LIMIT)
 async def analyze_audio(
     request: Request,
     mp3: UploadFile = File(..., description="MP3 audio file"),
