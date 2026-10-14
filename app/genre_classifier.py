@@ -96,6 +96,10 @@ def _get_classifier_session():
         return None, None, None
 
 
+_EXCLUDED_CATEGORIES = {"Non-Music", "Children's", "Brass & Military"}
+_EXCLUDED_GENRES = {"DJ Battle Tool", "Cut-up/DJ", "Turntablism"}
+
+
 def classify_audio_genre(
     audio_path: str,
     top_k: int = 5,
@@ -133,7 +137,7 @@ def classify_audio_genre(
         # 1. Load up to 30s of audio at 16,000 Hz (or resample preloaded audio)
         if y is None or sr is None:
             y, sr = librosa.load(audio_path, sr=16000, offset=offset, duration=duration)
-            if len(y) == 0:
+            if len(y) < 16000:
                 y, sr = librosa.load(audio_path, sr=16000, offset=0.0, duration=duration)
         elif sr != 16000 and len(y) > 0:
             y = librosa.resample(y, orig_sr=sr, target_sr=16000)
@@ -146,7 +150,10 @@ def classify_audio_genre(
                 "inference_time_sec": round(time.monotonic() - start_time, 3),
             }
 
-        # 2. Compute 96-band mel-spectrogram (Essentia Discogs-EffNet parameters)
+        # 2. Compute 96-band mel-spectrogram matching Essentia TensorflowInputMusiCNN:
+        #    frameSize=512, hopSize=256, numberBands=96, sampleRate=16000,
+        #    warpingFormula='slaneyMel' (htk=False), normalize='unit_tri' (norm='slaney'),
+        #    zero-centered framing (center=True, pad_mode='constant'), power=2.0
         mel = librosa.feature.melspectrogram(
             y=y,
             sr=16000,
@@ -154,12 +161,15 @@ def classify_audio_genre(
             hop_length=256,
             n_mels=96,
             window="hann",
-            center=False,
+            center=True,
+            pad_mode="constant",
             power=2.0,
+            htk=False,
+            norm="slaney",
         )
 
-        # 3. Essentia log-mel compression: log(10000 * mel + 1)
-        log_mel = np.log(10000.0 * mel + 1.0).T  # Shape: (time_frames, 96)
+        # 3. Essentia TensorflowInputMusiCNN log10-mel compression: log10(10000 * mel + 1)
+        log_mel = np.log10(10000.0 * mel + 1.0).T  # Shape: (time_frames, 96)
 
         # 4. Extract 128-frame patches with 64-frame hop
         time_frames = log_mel.shape[0]
@@ -178,31 +188,44 @@ def classify_audio_genre(
         batch = np.array(patches, dtype=np.float32)
 
         # 5. ONNX forward pass
-        infer_start = time.monotonic()
         outputs = session.run(None, {input_name: batch})
-        infer_time = time.monotonic() - infer_start
 
         # 6. Average predictions across temporal patches
         avg_preds = np.mean(outputs[0], axis=0)
-        ranked_indices = np.argsort(avg_preds)[::-1][:top_k]
+        ranked_indices = np.argsort(avg_preds)[::-1]
 
         top_genres = []
+        seen_genres = set()
         for idx in ranked_indices:
             full_label = classes[idx]
             conf = float(avg_preds[idx])
-            
+
             # Discogs labels format: "Category---Genre" (e.g., "Electronic---Electro")
             if "---" in full_label:
                 cat, gen = full_label.split("---", 1)
             else:
                 cat, gen = full_label, full_label
 
+            cat_clean = cat.strip()
+            gen_clean = gen.strip()
+
+            if cat_clean in _EXCLUDED_CATEGORIES or gen_clean in _EXCLUDED_GENRES:
+                continue
+
+            # Deduplicate genre names across categories (e.g. Electronic---Electro vs Hip Hop---Electro)
+            gen_key = gen_clean.lower()
+            if gen_key in seen_genres:
+                continue
+            seen_genres.add(gen_key)
+
             top_genres.append({
                 "label": full_label,
-                "genre": gen.strip(),
-                "category": cat.strip(),
+                "genre": gen_clean,
+                "category": cat_clean,
                 "confidence": round(conf, 4),
             })
+            if len(top_genres) >= top_k:
+                break
 
         primary = top_genres[0]["genre"] if top_genres else None
         elapsed = time.monotonic() - start_time

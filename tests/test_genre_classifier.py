@@ -17,3 +17,10 @@ class TestGenreClassifier:
         assert res["top_genres"] == []
         assert res["primary_genre"] is None
         assert res["inference_time_sec"] >= 0.0
+
+    def test_excluded_categories_and_genres_defined(self):
+        from app.genre_classifier import _EXCLUDED_CATEGORIES, _EXCLUDED_GENRES
+        assert "Non-Music" in _EXCLUDED_CATEGORIES
+        assert "DJ Battle Tool" in _EXCLUDED_GENRES
+        assert "Funeral Doom Metal" not in _EXCLUDED_GENRES  # Real genre, fixed by log10 scaling
+

@@ -75,7 +75,8 @@ def analyze_audio_profile(
             logger.warning("Tier 2 signal extraction failed for %s: %s", mp3_path, exc)
 
     # ── Tier 3: Neural Genre Classification ──────────────────────────────────
-    should_run_neural = force_neural or (len(t1_genres) == 0)
+    has_explicit_tag_genre = bool(tier1.get("sources", {}).get("tcon")) or bool(raw_prompt)
+    should_run_neural = force_neural or (len(t1_genres) == 0) or (not has_explicit_tag_genre)
     t3_result: Dict[str, Any] = {
         "ran": False,
         "primary_genre": None,

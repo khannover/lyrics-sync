@@ -24,20 +24,53 @@ _STYLE_PREAMBLE_RE = re.compile(
 )
 
 # Known genres taxonomy for extracting primary genres from arbitrary style prompts
-_GENRE_KEYWORDS = {
-    "techno", "ebm", "electronic", "dance", "edm", "house", "trance", "synthwave",
-    "retrowave", "industrial", "cyberpunk", "ambient", "pop", "rock", "metal",
-    "punk", "hip hop", "hip-hop", "rap", "r&b", "soul", "funk", "disco", "jazz",
-    "blues", "country", "folk", "reggae", "classical", "acoustic", "lo-fi", "lofi",
-    "drum and bass", "dnb", "dubstep", "hyperpop", "hardstyle", "garage", "trap",
-    "indie", "alternative", "grunge", "ska", "gothic", "darkwave", "heavy metal",
-    "black metal", "death metal", "electro", "synth-pop", "synthpop", "breakbeat"
+_GENRE_KEYWORDS = [
+    "french house", "electro house", "deep house", "tech house", "progressive house",
+    "tropical house", "acid house", "euro house", "hard techno", "minimal techno",
+    "dub techno", "deep techno", "drum and bass", "drum & bass", "liquid dnb",
+    "heavy metal", "black metal", "death metal", "doom metal", "power metal",
+    "thrash metal", "nu metal", "pop punk", "post-punk", "post-rock", "indie rock",
+    "alternative rock", "hard rock", "folk rock", "garage rock", "psychedelic rock",
+    "synth-pop", "synthpop", "dance-pop", "indie pop", "dream pop", "electropop",
+    "city pop", "j-pop", "k-pop", "hyperpop", "europop", "eurodance", "disco polo",
+    "dark synthwave", "synthwave", "retrowave", "darkwave", "chillwave", "vaporwave",
+    "coldwave", "new wave", "no wave", "hip hop", "hip-hop", "boom bap", "cloud rap",
+    "pop rap", "trip hop", "lo-fi", "lofi", "r&b", "neo soul", "bossa nova",
+    "techno", "ebm", "electronic", "dance", "edm", "house", "trance", "industrial",
+    "cyberpunk", "ambient", "downtempo", "chiptune", "breakbeat", "breaks", "dubstep",
+    "hardstyle", "hardcore", "gabber", "garage", "trap", "grime", "phonk", "drill",
+    "pop", "rock", "metal", "punk", "rap", "soul", "funk", "disco", "jazz",
+    "blues", "country", "folk", "reggae", "ska", "dub", "classical", "acoustic",
+    "indie", "alternative", "grunge", "gothic", "electro", "ballad", "schlager",
+]
+
+_CANONICAL_GENRE_CASING = {
+    "ebm": "EBM",
+    "edm": "EDM",
+    "dnb": "Drum and Bass",
+    "liquid dnb": "Liquid DnB",
+    "r&b": "R&B",
+    "lo-fi": "Lo-Fi",
+    "lofi": "Lo-Fi",
+    "j-pop": "J-Pop",
+    "k-pop": "K-Pop",
+    "synth-pop": "Synth-pop",
+    "synthpop": "Synth-pop",
+    "dance-pop": "Dance-pop",
 }
 
 _IGNORE_STYLE_TOKENS = {
     "no slop", "slop", "hq", "high quality", "clean", "explicit", "fast", "slow",
     "high-energy", "mid-tempo", "song", "track", "music", "masterpiece"
 }
+
+_STRUCTURAL_BRACKET_RE = re.compile(
+    r"^(?:verse|chorus|pre-chorus|post-chorus|bridge|intro|outro|hook|refrain|"
+    r"interlude|solo|instrumental|break|breakdown|drop|spoken|fade|end|part|section)"
+    r"(?:\s*\d+)?$",
+    re.IGNORECASE,
+)
+_INLINE_BRACKET_RE = re.compile(r"\[([^\]\r\n]{3,80})\]")
 
 
 def _strip_lrc_timestamps(lrc_text: str) -> str:
@@ -84,7 +117,7 @@ def parse_style_prompt(prompt_text: str) -> Tuple[List[str], List[str], Optional
 
         style_tags.append(part)
 
-        # Match against known music genres
+        # Match against known music genres (longest/most-specific keywords first)
         for g in _GENRE_KEYWORDS:
             if re.search(rf"\b{re.escape(g)}\b", lower):
                 # Normalize genre name to Title Case
@@ -96,6 +129,56 @@ def parse_style_prompt(prompt_text: str) -> Tuple[List[str], List[str], Optional
     dedup_styles = list(dict.fromkeys(style_tags))
 
     return dedup_genres, dedup_styles, raw_clean if raw_clean else None
+
+
+def extract_inline_bracket_cues(lyrics_text: str) -> Tuple[List[str], List[str]]:
+    """
+    Scan lyrics for inline bracketed musical cues such as:
+      [French House Filter Sweep], [4/4 Berlin techno bounce beat starts],
+      [Sharp Guitar Riffs, Driving Beat]
+    Returns (matched_genres, descriptive_style_tags).
+    """
+    if not lyrics_text:
+        return [], []
+
+    genres: List[str] = []
+    cues: List[str] = []
+
+    for match in _INLINE_BRACKET_RE.finditer(lyrics_text):
+        inner = match.group(1).strip()
+        if not inner or _LRC_TS_RE.match(f"[{inner}]"):
+            continue
+        if _STRUCTURAL_BRACKET_RE.match(inner):
+            continue
+        # Strip leading structural label like "Intro - " or "Hook: "
+        cleaned_cue = re.sub(
+            r"^(?:intro|outro|verse(?:\s*\d+)?|chorus|pre-chorus|bridge|hook|break|drop|spoken(?:\s+intro)?)\s*[-–—:]\s*",
+            "",
+            inner,
+            flags=re.IGNORECASE,
+        ).strip()
+        if not cleaned_cue or _STRUCTURAL_BRACKET_RE.match(cleaned_cue):
+            continue
+        # Skip spoken dialogue quotes inside brackets
+        if '"' in cleaned_cue or "„" in cleaned_cue:
+            continue
+
+        for sub in re.split(r"[,;]+", cleaned_cue):
+            sub_clean = sub.strip()
+            if not sub_clean or _STRUCTURAL_BRACKET_RE.match(sub_clean):
+                continue
+            if len(sub_clean) <= 50 and sub_clean not in cues:
+                cues.append(sub_clean)
+
+            lower = sub_clean.lower()
+            for g in _GENRE_KEYWORDS:
+                if re.search(rf"\b{re.escape(g)}\b", lower):
+                    canon = _CANONICAL_GENRE_CASING.get(g, g.title())
+                    if not any(canon.lower() == existing.lower() for existing in genres):
+                        genres.append(canon)
+                    break
+
+    return genres[:4], cues[:8]
 
 
 def strip_style_preamble(text: str) -> Tuple[str, Optional[str]]:
@@ -295,6 +378,18 @@ def extract_lyrics_from_mp3(mp3_path: str) -> Dict[str, Any]:
         all_genres.extend(g for g in p_genres if g not in all_genres)
         all_style_tags.extend(s for s in p_styles if s not in all_style_tags)
         raw_prompt_found = p_raw
+
+    # ── 9. Scan plain lyrics for inline bracketed musical cues ─────────────
+    if plain:
+        inline_genres, inline_cues = extract_inline_bracket_cues(plain)
+        for ig in inline_genres:
+            if not any(ig.lower() == eg.lower() for eg in all_genres):
+                all_genres.append(ig)
+        for ic in inline_cues:
+            if not any(ic.lower() == es.lower() for es in all_style_tags):
+                all_style_tags.append(ic)
+        if inline_genres or inline_cues:
+            sources["inline_cues"] = True
 
     return {
         "plain_lyrics": plain if plain else None,

@@ -4,8 +4,35 @@ import pytest
 from app.lyrics_tag_reader import (
     parse_style_prompt,
     strip_style_preamble,
+    extract_inline_bracket_cues,
     extract_lyrics_from_mp3,
 )
+
+
+class TestInlineBracketCues:
+    def test_extracts_genres_and_cues_from_suno_brackets(self):
+        lyrics = (
+            "[Intro - French House Filter Sweep]\n"
+            "[Verse 1]\n"
+            "Dancing in the neon rain\n"
+            "[4/4 Berlin techno bounce beat starts]\n"
+            "[Chorus]\n"
+            "[Euphoric Synth Drop, Driving Bassline]"
+        )
+        genres, cues = extract_inline_bracket_cues(lyrics)
+        assert "French House" in genres
+        assert "Techno" in genres
+        assert "French House Filter Sweep" in cues
+        assert "Euphoric Synth Drop" in cues
+        assert "Verse 1" not in cues
+        assert "Chorus" not in cues
+
+    def test_ignores_lrc_timestamps_and_spoken_quotes(self):
+        lyrics = '[00:12.50][Verse 1]\n[Spoken: "This is not a rock genre tag"]\nJust lyrics'
+        genres, cues = extract_inline_bracket_cues(lyrics)
+        assert genres == []
+        assert cues == []
+
 
 
 class TestParseStylePrompt:
