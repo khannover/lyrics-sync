@@ -968,8 +968,13 @@ async def analyze_audio(
     include_fingerprint: bool = Form(default=True, description="Generate Chromaprint / AcoustID copyright fingerprint"),
     include_ai_provenance: bool = Form(default=True, description="Detect Suno/Udio/AI watermark and spectral artifacts"),
 ):
-    if not mp3.filename.lower().endswith(".mp3"):
-        raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
+    ext = Path(mp3.filename or "audio.mp3").suffix.lower()
+    allowed_audio_exts = (".mp3", ".wav", ".flac", ".ogg", ".m4a")
+    if ext not in allowed_audio_exts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Please upload a supported audio file ({', '.join(allowed_audio_exts)}).",
+        )
 
     job_id = str(uuid.uuid4())
     job_dir = WORK_DIR / job_id
@@ -986,16 +991,16 @@ async def analyze_audio(
             file=mp3.filename,
         )
 
-        mp3_path = job_dir / "input.mp3"
-        with open(mp3_path, "wb") as f:
+        audio_file_path = job_dir / f"input{ext}"
+        with open(audio_file_path, "wb") as f:
             shutil.copyfileobj(mp3.file, f)
 
-        if mp3_path.stat().st_size == 0:
-            raise HTTPException(status_code=400, detail="Uploaded MP3 file is empty.")
+        if audio_file_path.stat().st_size == 0:
+            raise HTTPException(status_code=400, detail="Uploaded audio file is empty.")
 
         result = await asyncio.to_thread(
             analyze_audio_profile,
-            str(mp3_path),
+            str(audio_file_path),
             include_signal=include_signal,
             force_neural=force_neural,
             top_k_genres=top_k_genres,

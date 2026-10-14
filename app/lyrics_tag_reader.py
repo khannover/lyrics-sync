@@ -199,7 +199,7 @@ def strip_style_preamble(text: str) -> Tuple[str, Optional[str]]:
 
 
 def _load_tags(mp3_path: str):
-    """Load tags via MP3 first, with ID3 fallback for edge cases."""
+    """Load tags via MP3 first, with ID3 and generic mutagen.File fallback."""
     try:
         audio = MP3(mp3_path)
         if audio.tags is not None:
@@ -210,7 +210,17 @@ def _load_tags(mp3_path: str):
     try:
         return ID3(mp3_path)
     except Exception:
-        return None
+        pass
+
+    try:
+        import mutagen
+        mf = mutagen.File(mp3_path)
+        if mf is not None and getattr(mf, "tags", None) is not None:
+            return mf.tags
+    except Exception:
+        pass
+
+    return None
 
 
 def _sylt_to_lrc(sylt_frame: SYLT) -> str:
