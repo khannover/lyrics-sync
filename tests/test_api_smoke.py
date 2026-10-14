@@ -695,3 +695,53 @@ def test_enqueue_sync_job_rejects_empty_mp3():
         )
     assert response.status_code == 400
     assert response.json()["detail"] == "Uploaded MP3 file is empty."
+
+
+def test_enqueue_sync_job_requires_token_when_secret_configured(monkeypatch):
+    monkeypatch.setenv("LYRIC_SYNC_CALLBACK_SECRET", "super-secret-token")
+    with TestClient(app) as client:
+        resp_missing = client.post(
+            "/sync/jobs",
+            data=_async_job_form(),
+            files=_async_job_files(),
+        )
+        assert resp_missing.status_code == 401
+
+        resp_wrong = client.post(
+            "/sync/jobs",
+            data=_async_job_form(),
+            files=_async_job_files(),
+            headers={"X-Lyrics-Sync-Token": "wrong-token"},
+        )
+        assert resp_wrong.status_code == 401
+
+
+def test_sync_removes_job_dir_immediately(monkeypatch, tmp_path):
+    from tests.test_sylt_writer import _SILENT_MP3_BYTES
+    from app.alignment import AlignmentResult
+
+    work = tmp_path / "sync-work"
+    work.mkdir()
+    monkeypatch.setattr(main, "WORK_DIR", work)
+
+    async def _fake_alignment(job_id, mp3_path, lyrics_text, job_dir, timestamp_mode="line"):
+        return AlignmentResult(
+            lines=[("hello", 0)],
+            quality="good",
+            warnings=[],
+            report={"quality": "good", "line_count": 1},
+        )
+
+    monkeypatch.setattr(main, "_run_alignment", _fake_alignment)
+    monkeypatch.setattr(main, "write_sylt_tag", lambda *args, **kwargs: None)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync",
+            files={
+                "mp3": ("track.mp3", _SILENT_MP3_BYTES, "audio/mpeg"),
+                "lyrics": ("lyrics.txt", b"hello world", "text/plain"),
+            },
+        )
+    assert response.status_code == 200
+    assert list(work.iterdir()) == []

@@ -155,3 +155,191 @@ def test_queue_stats_reflects_job_statuses(tmp_path, monkeypatch):
 
 def test_get_job_unknown_returns_none():
     assert aj.get_job("00000000-0000-0000-0000-000000000000") is None
+
+
+def test_cleanup_protected_names_in_flight_and_pending_remain_protected():
+    now = 100000.0
+    job_queued = aj.SyncJob(
+        job_id="job-queued",
+        track_id="t-queued",
+        callback_url="",
+        manual=False,
+        status="queued",
+        created_at=now - 50000,
+    )
+    job_processing = aj.SyncJob(
+        job_id="job-proc",
+        track_id="t-proc",
+        callback_url="",
+        manual=False,
+        status="processing",
+        created_at=now - 50000,
+    )
+    job_pending_fresh = aj.SyncJob(
+        job_id="job-pending-fresh",
+        track_id="t-pending-fresh",
+        callback_url="https://example.com/hook",
+        manual=False,
+        status="completed",
+        callback_status=aj.CALLBACK_PENDING,
+        created_at=now - 1000,
+        completed_at=now - 500,
+    )
+    job_pending_timed_out = aj.SyncJob(
+        job_id="job-pending-timed-out",
+        track_id="t-pending-timed-out",
+        callback_url="https://example.com/hook",
+        manual=False,
+        status="completed",
+        callback_status=aj.CALLBACK_PENDING,
+        created_at=now - 100000,
+        completed_at=now - 90000,
+    )
+
+    aj._jobs[job_queued.job_id] = job_queued
+    aj._jobs[job_processing.job_id] = job_processing
+    aj._jobs[job_pending_fresh.job_id] = job_pending_fresh
+    aj._jobs[job_pending_timed_out.job_id] = job_pending_timed_out
+
+    protected = aj.cleanup_protected_names(now=now)
+    assert "job-queued" in protected
+    assert "job-proc" in protected
+    assert "job-pending-fresh" in protected
+    assert "job-pending-timed-out" not in protected
+
+
+def test_cleanup_protected_names_delivered_retention():
+    now = 100000.0
+    job_delivered_fresh = aj.SyncJob(
+        job_id="job-deliv-fresh",
+        track_id="t-deliv-fresh",
+        callback_url="https://example.com/hook",
+        manual=False,
+        status="completed",
+        callback_status=aj.CALLBACK_DELIVERED,
+        created_at=now - 2000,
+        completed_at=now - 1800,
+        delivered_at=now - 1800,  # 30 min ago (< 3600s grace period)
+    )
+    job_delivered_old = aj.SyncJob(
+        job_id="job-deliv-old",
+        track_id="t-deliv-old",
+        callback_url="https://example.com/hook",
+        manual=False,
+        status="completed",
+        callback_status=aj.CALLBACK_DELIVERED,
+        created_at=now - 10000,
+        completed_at=now - 7200,
+        delivered_at=now - 7200,  # 2 hours ago (> 3600s grace period)
+    )
+    job_delivered_legacy_old = aj.SyncJob(
+        job_id="job-deliv-legacy-old",
+        track_id="t-deliv-legacy-old",
+        callback_url="https://example.com/hook",
+        manual=False,
+        status="completed",
+        callback_status=aj.CALLBACK_DELIVERED,
+        created_at=now - 10000,
+        completed_at=now - 5000,  # > 3600s
+        delivered_at=None,
+    )
+    job_delivered_legacy_fresh = aj.SyncJob(
+        job_id="job-deliv-legacy-fresh",
+        track_id="t-deliv-legacy-fresh",
+        callback_url="https://example.com/hook",
+        manual=False,
+        status="completed",
+        callback_status=aj.CALLBACK_DELIVERED,
+        created_at=now - 1000,
+        completed_at=now - 500,  # < 3600s
+        delivered_at=None,
+    )
+
+    aj._jobs[job_delivered_fresh.job_id] = job_delivered_fresh
+    aj._jobs[job_delivered_old.job_id] = job_delivered_old
+    aj._jobs[job_delivered_legacy_old.job_id] = job_delivered_legacy_old
+    aj._jobs[job_delivered_legacy_fresh.job_id] = job_delivered_legacy_fresh
+
+    protected = aj.cleanup_protected_names(now=now)
+    assert "job-deliv-fresh" in protected
+    assert "job-deliv-legacy-fresh" in protected
+    assert "job-deliv-old" not in protected
+    assert "job-deliv-legacy-old" not in protected
+
+
+def test_cleanup_protected_names_acked_retention():
+    now = 100000.0
+    job_acked_fresh = aj.SyncJob(
+        job_id="job-acked-fresh",
+        track_id="t-acked-fresh",
+        callback_url="",
+        manual=False,
+        status="completed",
+        callback_status=aj.CALLBACK_ACKED,
+        acked_at=now - 3600,
+    )
+    job_acked_old = aj.SyncJob(
+        job_id="job-acked-old",
+        track_id="t-acked-old",
+        callback_url="",
+        manual=False,
+        status="completed",
+        callback_status=aj.CALLBACK_ACKED,
+        acked_at=now - 90000,
+    )
+    job_acked_no_ts = aj.SyncJob(
+        job_id="job-acked-no-ts",
+        track_id="t-acked-no-ts",
+        callback_url="",
+        manual=False,
+        status="completed",
+        callback_status=aj.CALLBACK_ACKED,
+        acked_at=None,
+    )
+
+    aj._jobs[job_acked_fresh.job_id] = job_acked_fresh
+    aj._jobs[job_acked_old.job_id] = job_acked_old
+    aj._jobs[job_acked_no_ts.job_id] = job_acked_no_ts
+
+    protected = aj.cleanup_protected_names(now=now)
+    assert "job-acked-fresh" in protected
+    assert "job-acked-old" not in protected
+    assert "job-acked-no-ts" not in protected
+
+
+def test_prune_jobs_and_evict_job():
+    job1 = aj.SyncJob(
+        job_id="j1",
+        track_id="t1",
+        callback_url="",
+        manual=False,
+    )
+    job2 = aj.SyncJob(
+        job_id="j2",
+        track_id="t2",
+        callback_url="",
+        manual=False,
+    )
+    aj._jobs["j1"] = job1
+    aj._jobs["j2"] = job2
+    aj._track_jobs["t1"] = "j1"
+    aj._track_jobs["t2"] = "j2"
+
+    assert len(aj._jobs) == 2
+    assert len(aj._track_jobs) == 2
+
+    # Prune non-existent does not fail
+    assert aj.prune_jobs(["ghost", "orphan.tmp"]) == 0
+
+    # Prune j1
+    assert aj.prune_jobs(["j1"]) == 1
+    assert "j1" not in aj._jobs
+    assert "t1" not in aj._track_jobs
+    assert "j2" in aj._jobs
+    assert aj._track_jobs["t2"] == "j2"
+
+    # Evict j2
+    assert aj.evict_job("j2") is True
+    assert "j2" not in aj._jobs
+    assert "t2" not in aj._track_jobs
+    assert aj.evict_job("j2") is False

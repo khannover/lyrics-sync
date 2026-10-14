@@ -68,10 +68,10 @@ export function initEditorModule() {
                     <button class="player-btn btn-play-line" style="width:22px; height:22px; font-size:10px;">▶</button>
                 </td>
                 <td style="width: 90px;">
-                    <input type="text" class="input-time" value="${formatLrcTimestamp(item.time).replace(/[\[\]]/g, '')}" style="width:100%; background:transparent; border:1px solid var(--border-subtle); color:var(--cyan); font-family:var(--font-mono); font-size:0.75rem; padding:2px 4px; border-radius:3px;">
+                    <input type="text" class="input-time" style="width:100%; background:transparent; border:1px solid var(--border-subtle); color:var(--cyan); font-family:var(--font-mono); font-size:0.75rem; padding:2px 4px; border-radius:3px;">
                 </td>
                 <td>
-                    <input type="text" class="input-text" value="${item.text || ''}" style="width:100%; background:transparent; border:1px solid var(--border-subtle); color:var(--text-primary); font-family:var(--font-mono); font-size:0.75rem; padding:2px 4px; border-radius:3px;">
+                    <input type="text" class="input-text" style="width:100%; background:transparent; border:1px solid var(--border-subtle); color:var(--text-primary); font-family:var(--font-mono); font-size:0.75rem; padding:2px 4px; border-radius:3px;">
                 </td>
                 <td style="width: 130px; text-align:right;">
                     <button class="btn-cyber btn-cyber--ghost btn-cyber--sm btn-set-now" title="Set to current playhead">SET</button>
@@ -80,6 +80,34 @@ export function initEditorModule() {
                     <button class="btn-cyber btn-cyber--coral btn-cyber--sm btn-del" title="Delete">✕</button>
                 </td>
             `;
+
+            const timeInput = tr.querySelector('.input-time');
+            timeInput.value = formatLrcTimestamp(item.time).replace(/[\[\]]/g, '');
+            timeInput.onchange = () => {
+                const raw = timeInput.value.trim().replace(/^\[|\]$/g, '');
+                const m = raw.match(/^(\d+):(\d+(?:\.\d+)?)$/);
+                if (m) {
+                    item.time = Math.max(0, parseInt(m[1], 10) * 60 + parseFloat(m[2]));
+                    items.sort((a, b) => a.time - b.time);
+                    state.set('syncMap', items);
+                } else {
+                    const sec = parseFloat(raw);
+                    if (isFinite(sec) && sec >= 0) {
+                        item.time = sec;
+                        items.sort((a, b) => a.time - b.time);
+                        state.set('syncMap', items);
+                    } else {
+                        timeInput.value = formatLrcTimestamp(item.time).replace(/[\[\]]/g, '');
+                    }
+                }
+            };
+
+            const textInput = tr.querySelector('.input-text');
+            textInput.value = item.text || '';
+            textInput.onchange = () => {
+                item.text = textInput.value;
+                state.set('syncMap', items);
+            };
 
             tr.querySelector('.btn-play-line').onclick = () => {
                 player.seek(item.time);
@@ -106,12 +134,6 @@ export function initEditorModule() {
 
             tr.querySelector('.btn-del').onclick = () => {
                 items.splice(idx, 1);
-                state.set('syncMap', items);
-            };
-
-            const textInput = tr.querySelector('.input-text');
-            textInput.onchange = () => {
-                item.text = textInput.value;
                 state.set('syncMap', items);
             };
 

@@ -122,7 +122,7 @@ export function initSyncModule() {
 
         try {
             const data = await extractLyricsFromMp3(loadedAudioFile);
-            const foundText = data.plain_lyrics || data.timed_lyrics;
+            const foundText = data.plain_lyrics || data.timed_lyrics_lrc || data.timed_lyrics;
             if (foundText) {
                 sourceTextRadio.checked = true;
                 sourceFileRadio.checked = false;
@@ -149,7 +149,7 @@ export function initSyncModule() {
 
         try {
             const data = await extractOrTranscribe(loadedAudioFile);
-            const text = data.plain_lyrics || data.timed_lyrics;
+            const text = data.plain_lyrics || data.timed_lyrics_lrc || data.timed_lyrics;
             if (text) {
                 sourceTextRadio.checked = true;
                 lyricsFileWrap.classList.add('hidden');

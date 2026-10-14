@@ -153,6 +153,8 @@ def analyze_audio_profile(
         "bpm": final_bpm,
         "key": t2_result.get("key"),
         "energy": t2_result.get("energy", "unknown"),
+        "danceability": t2_result.get("danceability"),
+        "loudness_lufs": t2_result.get("loudness_lufs"),
         "content_rating": content_rating,
         "copyright_fingerprint": copyright_fp,
         "ai_provenance": ai_prov,

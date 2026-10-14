@@ -111,30 +111,48 @@ def evaluate_content_rating(lyrics_text: Optional[str]) -> Dict[str, Any]:
             "categories": [],
             "matched_count": 0,
             "matched_terms": [],
+            "category_breakdown": {
+                "profanity": 0,
+                "sexual_content": 0,
+                "sexual": 0,
+                "hate_speech": 0,
+                "violence": 0,
+            },
         }
 
     matched_categories: Set[str] = set()
     matched_terms: List[str] = []
     has_severe = False
     mild_count = 0
+    breakdown: Dict[str, int] = {
+        "profanity": 0,
+        "sexual_content": 0,
+        "sexual": 0,
+        "hate_speech": 0,
+        "violence": 0,
+    }
 
     for category, pattern in _COMPILED_RULES:
         matches = pattern.findall(lyrics_text)
         if not matches:
             continue
 
-        for m in matches:
-            norm = m.lower().strip()
+        unique_cat_matches = {m.lower().strip() for m in matches}
+        for norm in unique_cat_matches:
             if norm not in matched_terms:
                 matched_terms.append(norm)
 
         if category == "mild_profanity":
             mild_count += len(matches)
+            breakdown["profanity"] += len(unique_cat_matches)
             if not has_severe:
                 matched_categories.add("profanity")
         else:
             has_severe = True
             matched_categories.add(category)
+            breakdown[category] = breakdown.get(category, 0) + len(unique_cat_matches)
+            if category == "sexual_content":
+                breakdown["sexual"] = breakdown["sexual_content"]
 
     total_matches = len(matched_terms)
     if not matched_terms:
@@ -144,6 +162,7 @@ def evaluate_content_rating(lyrics_text: Optional[str]) -> Dict[str, Any]:
             "categories": [],
             "matched_count": 0,
             "matched_terms": [],
+            "category_breakdown": breakdown,
         }
 
     if has_severe:
@@ -162,4 +181,5 @@ def evaluate_content_rating(lyrics_text: Optional[str]) -> Dict[str, Any]:
         "categories": sorted(list(matched_categories)),
         "matched_count": total_matches,
         "matched_terms": matched_terms[:10],
+        "category_breakdown": breakdown,
     }

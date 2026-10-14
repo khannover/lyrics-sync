@@ -15,6 +15,7 @@ from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from mutagen.mp3 import MP3, HeaderNotFoundError
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -28,6 +29,7 @@ from app.async_jobs import (
     get_job,
     ack_job,
     cleanup_protected_names,
+    prune_jobs,
     queue_stats,
     start_worker,
     stop_worker,
@@ -420,9 +422,11 @@ async def lifespan(app: FastAPI):
                     protected_names=active_job_ids | cleanup_protected_names(),
                 )
                 if removed:
+                    pruned = prune_jobs(removed)
                     logger.info(
-                        "Cleanup removed %d stale item(s): %s",
+                        "Cleanup removed %d stale item(s) (%d pruned from memory): %s",
                         len(removed),
+                        pruned,
                         ", ".join(removed),
                     )
             except asyncio.CancelledError:
@@ -592,6 +596,7 @@ async def sync_lyrics(
         raise HTTPException(status_code=500, detail=f"Alignment failed: {e}")
     finally:
         _unregister_job(job_id)
+        shutil.rmtree(job_dir, ignore_errors=True)
 
 
 @app.post(
@@ -608,6 +613,7 @@ async def enqueue_sync_job(
     callback_url: str = Form(..., description="Webhook URL for completion payload"),
     manual: bool = Form(default=False, description="Manual sync — save fallback-quality LRC"),
 ):
+    _verify_internal_token(request)
     if not mp3.filename.lower().endswith(".mp3"):
         raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
     if not (track_id or "").strip():
@@ -701,6 +707,7 @@ async def sync_lyrics_mp3_only(
     _register_job(job_id)
     request_started = time.monotonic()
     client_ip = _get_client_ip(request)
+    cleanup_scheduled = False
 
     try:
         _job_log(
@@ -762,11 +769,13 @@ async def sync_lyrics_mp3_only(
         }
         if alignment.warnings:
             response_headers["X-Sync-Warning"] = "; ".join(alignment.warnings)
+        cleanup_scheduled = True
         return FileResponse(
             path=str(output_path),
             media_type="audio/mpeg",
             filename=re.sub(r"[^\x20-\x7E]", "_", download_name),
             headers=response_headers,
+            background=BackgroundTask(shutil.rmtree, job_dir, True),
         )
     except HTTPException:
         raise
@@ -775,13 +784,17 @@ async def sync_lyrics_mp3_only(
         raise HTTPException(status_code=500, detail=f"Alignment failed: {e}")
     finally:
         _unregister_job(job_id)
+        if not cleanup_scheduled:
+            shutil.rmtree(job_dir, ignore_errors=True)
 
 
 @app.post(
     "/lyrics/from-mp3",
     summary="Extract embedded lyrics from an MP3 file",
 )
+@limiter.limit(SYNC_RATE_LIMIT)
 async def lyrics_from_mp3(
+    request: Request,
     mp3: UploadFile = File(..., description="MP3 audio file"),
 ):
     if not mp3.filename.lower().endswith(".mp3"):

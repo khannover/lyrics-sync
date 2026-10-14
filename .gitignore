@@ -3,3 +3,9 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .groundwire/
+.env
+.venv/
+venv/
+models/*.onnx
+models/*.json
+

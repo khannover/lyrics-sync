@@ -27,6 +27,9 @@ def detect_ai_provenance(
     audio_path: str,
     offset: float = 15.0,
     duration: float = 10.0,
+    *,
+    y: Optional[np.ndarray] = None,
+    sr: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Detect AI provenance and synthetic audio signatures.
@@ -100,9 +103,17 @@ def detect_ai_provenance(
     try:
         import librosa
 
-        y, sr = librosa.load(audio_path, sr=44100, offset=offset, duration=duration)
-        if len(y) == 0:
-            y, sr = librosa.load(audio_path, sr=44100, offset=0.0, duration=duration)
+        if y is None or sr is None:
+            y, sr = librosa.load(audio_path, sr=44100, offset=offset, duration=duration)
+            if len(y) == 0:
+                y, sr = librosa.load(audio_path, sr=44100, offset=0.0, duration=duration)
+        else:
+            if sr != 44100 and len(y) > 0:
+                y = librosa.resample(y, orig_sr=sr, target_sr=44100)
+                sr = 44100
+            max_samples = int(duration * sr)
+            if len(y) > max_samples:
+                y = y[:max_samples]
 
         if len(y) > sr:
             # 99% roll-off frequency

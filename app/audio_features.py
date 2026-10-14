@@ -28,11 +28,11 @@ def estimate_musical_key(chroma_mean: np.ndarray) -> Tuple[str, float]:
     Estimate musical key (e.g., 'A minor', 'C major') from 12-bin mean chroma.
     Uses Pearson correlation against Krumhansl-Schmuckler tonality profiles.
     """
-    chroma_std = chroma_mean.std()
-    if chroma_std > 1e-6:
-        chroma_norm = (chroma_mean - chroma_mean.mean()) / chroma_std
-    else:
-        chroma_norm = chroma_mean
+    chroma_std = float(chroma_mean.std())
+    if chroma_std <= 1e-6:
+        return "Unknown", 0.0
+
+    chroma_norm = (chroma_mean - chroma_mean.mean()) / chroma_std
 
     best_key = "Unknown"
     best_corr = -2.0
@@ -57,6 +57,9 @@ def extract_audio_features(
     audio_path: str,
     offset: float = 15.0,
     duration: float = 30.0,
+    *,
+    y: Optional[np.ndarray] = None,
+    sr: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Extract acoustic signal features from an audio file.
@@ -68,6 +71,8 @@ def extract_audio_features(
         "key": str | None,
         "rms": float,
         "spectral_centroid": float,
+        "danceability": float | None,
+        "loudness_lufs": float | None,
         "analysis_time_sec": float
       }
     """
@@ -75,11 +80,15 @@ def extract_audio_features(
 
     start_time = time.monotonic()
     try:
-        # Load up to 30s of audio starting at offset=15s to bypass silent intros
-        y, sr = librosa.load(audio_path, sr=22050, offset=offset, duration=duration)
-        if len(y) == 0:
-            # Fallback to loading from start if offset exceeded duration
-            y, sr = librosa.load(audio_path, sr=22050, offset=0.0, duration=duration)
+        if y is None or sr is None:
+            # Load up to 30s of audio starting at offset=15s to bypass silent intros
+            y, sr = librosa.load(audio_path, sr=22050, offset=offset, duration=duration)
+            if len(y) == 0:
+                # Fallback to loading from start if offset exceeded duration
+                y, sr = librosa.load(audio_path, sr=22050, offset=0.0, duration=duration)
+        elif sr != 22050 and len(y) > 0:
+            y = librosa.resample(y, orig_sr=sr, target_sr=22050)
+            sr = 22050
 
         if len(y) == 0:
             return {
@@ -88,19 +97,26 @@ def extract_audio_features(
                 "key": None,
                 "rms": 0.0,
                 "spectral_centroid": 0.0,
+                "danceability": None,
+                "loudness_lufs": None,
                 "analysis_time_sec": round(time.monotonic() - start_time, 2),
             }
 
-        # 1. BPM / Tempo
+        # 1. BPM / Tempo & Danceability
         onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-        tempo = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)[0]
+        tempo, beats = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)
         bpm_val = int(round(float(np.atleast_1d(tempo)[0])))
         if bpm_val <= 0 or bpm_val > 300:
             bpm_val = None
 
+        onset_pulse = float(np.std(onset_env) / (np.mean(onset_env) + 1e-6)) if len(onset_env) > 0 else 0.0
+        tempo_bonus = 1.0 - min(1.0, abs((bpm_val or 120) - 122) / 90.0)
+        danceability = round(float(max(0.05, min(0.99, 0.55 * min(1.0, onset_pulse / 1.8) + 0.45 * tempo_bonus))), 2)
+
         # 2. Energy / Loudness & Brightness
         rms = librosa.feature.rms(y=y)
         mean_rms = float(np.mean(rms))
+        loudness_lufs = round(float(max(-60.0, min(0.0, 20.0 * np.log10(max(mean_rms, 1e-5)) - 0.691))), 1)
 
         cent = librosa.feature.spectral_centroid(y=y, sr=sr)
         mean_cent = float(np.mean(cent))
@@ -124,6 +140,8 @@ def extract_audio_features(
             "key": key_val,
             "rms": round(mean_rms, 4),
             "spectral_centroid": round(mean_cent, 1),
+            "danceability": danceability,
+            "loudness_lufs": loudness_lufs,
             "analysis_time_sec": round(elapsed, 2),
         }
 
@@ -135,5 +153,7 @@ def extract_audio_features(
             "key": None,
             "rms": 0.0,
             "spectral_centroid": 0.0,
+            "danceability": None,
+            "loudness_lufs": None,
             "analysis_time_sec": round(time.monotonic() - start_time, 2),
         }

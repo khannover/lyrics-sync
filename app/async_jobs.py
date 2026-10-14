@@ -12,7 +12,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import httpx
 
@@ -30,6 +30,8 @@ CALLBACK_PENDING = "pending"
 CALLBACK_DELIVERED = "delivered"
 CALLBACK_ACKED = "acked"
 ACK_RETENTION_SECONDS = float(os.environ.get("LYRIC_SYNC_ACK_RETENTION_SECONDS", "86400"))
+DELIVERED_RETENTION_SECONDS = float(os.environ.get("LYRIC_SYNC_DELIVERED_RETENTION_SECONDS", "3600"))
+CALLBACK_RETRY_TIMEOUT_SECONDS = float(os.environ.get("LYRIC_SYNC_CALLBACK_RETRY_TIMEOUT_SECONDS", "86400"))
 
 
 @dataclass
@@ -52,6 +54,7 @@ class SyncJob:
     callback_attempts: int = 0
     callback_last_error: Optional[str] = None
     acked_at: Optional[float] = None
+    delivered_at: Optional[float] = None
 
 
 _jobs: dict[str, SyncJob] = {}
@@ -84,6 +87,7 @@ def _save_job(job: SyncJob) -> None:
         "callback_attempts": job.callback_attempts,
         "callback_last_error": job.callback_last_error,
         "acked_at": job.acked_at,
+        "delivered_at": job.delivered_at,
     }
     path = job.job_dir / "job.json"
     tmp = path.with_suffix(".json.tmp")
@@ -118,6 +122,7 @@ def load_persisted_jobs() -> int:
                 callback_attempts=int(data.get("callback_attempts") or 0),
                 callback_last_error=data.get("callback_last_error"),
                 acked_at=data.get("acked_at"),
+                delivered_at=data.get("delivered_at"),
             )
             if job.status not in JOB_STATUSES:
                 continue
@@ -160,6 +165,7 @@ def _job_snapshot(job: SyncJob) -> dict[str, Any]:
         "callback_attempts": job.callback_attempts,
         "callback_last_error": job.callback_last_error,
         "acked_at": job.acked_at,
+        "delivered_at": job.delivered_at,
     }
 
 
@@ -356,6 +362,7 @@ async def _deliver_callback(job: SyncJob) -> bool:
     if not job.callback_url:
         logger.warning("[async] job=%s missing callback_url — skipping webhook", job.job_id)
         job.callback_status = CALLBACK_DELIVERED
+        job.delivered_at = job.delivered_at or time.time()
         _save_job(job)
         return True
 
@@ -392,6 +399,7 @@ async def _deliver_callback(job: SyncJob) -> bool:
                         response.status_code,
                     )
                     job.callback_status = CALLBACK_DELIVERED
+                    job.delivered_at = job.delivered_at or time.time()
                     job.callback_last_error = None
                     _save_job(job)
                     return True
@@ -424,12 +432,64 @@ async def _deliver_callback(job: SyncJob) -> bool:
 
 
 def cleanup_protected_names(now: Optional[float] = None) -> set[str]:
-    now = now or time.time()
+    now = time.time() if now is None else now
     protected = set()
     for job in _jobs.values():
-        if job.callback_status != CALLBACK_ACKED or not job.acked_at or (now - job.acked_at) < ACK_RETENTION_SECONDS:
+        # In-flight jobs: queued or processing
+        if job.status in {"queued", "processing"}:
             protected.add(job.job_id)
+            continue
+
+        # Pending webhook retries: protected until retry timeout
+        if job.callback_status == CALLBACK_PENDING:
+            ref_time = job.completed_at or job.created_at
+            if (now - ref_time) < CALLBACK_RETRY_TIMEOUT_SECONDS:
+                protected.add(job.job_id)
+            continue
+
+        # Acked jobs within their retention window
+        if job.callback_status == CALLBACK_ACKED:
+            if job.acked_at and (now - job.acked_at) < ACK_RETENTION_SECONDS:
+                protected.add(job.job_id)
+            continue
+
+        # Delivered jobs within their finite grace period
+        if job.callback_status == CALLBACK_DELIVERED:
+            delivered_time = job.delivered_at or job.completed_at or job.created_at
+            if delivered_time and (now - delivered_time) < DELIVERED_RETENTION_SECONDS:
+                protected.add(job.job_id)
+            continue
+
     return protected
+
+
+def prune_jobs(job_ids: Iterable[str]) -> int:
+    """Evict removed job IDs from in-memory state (_jobs and _track_jobs).
+
+    Returns the count of evicted jobs.
+    """
+    evicted = 0
+    for jid in job_ids:
+        job = _jobs.pop(jid, None)
+        if job is not None:
+            evicted += 1
+            if job.track_id and _track_jobs.get(job.track_id) == jid:
+                _track_jobs.pop(job.track_id, None)
+        else:
+            stale_tracks = [t for t, id_ in _track_jobs.items() if id_ == jid]
+            for t in stale_tracks:
+                _track_jobs.pop(t, None)
+    if evicted:
+        logger.info("[async] pruned %d in-memory job(s)", evicted)
+    return evicted
+
+
+def evict_job(job_id: str) -> bool:
+    """Evict a single job ID from in-memory state.
+
+    Returns True if the job was present and evicted.
+    """
+    return prune_jobs([job_id]) > 0
 
 
 def ack_job(job_id: str) -> Optional[dict[str, Any]]:

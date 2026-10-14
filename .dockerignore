@@ -20,6 +20,9 @@ Dockerfile
 .DS_Store
 Thumbs.db
 
-# Large data/models (if you are downloading them during build)
-# Only ignore these if they are already in /app/models inside the container
-# models/
+# Groundwire, tests, scripts, and docs
+.groundwire/
+tests/
+scripts/
+*.md
+

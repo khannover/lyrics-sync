@@ -65,13 +65,14 @@ export function initInspectorModule() {
         dashboardGrid.classList.add('hidden');
 
         try {
-            // Run analyzeAudio and extractLyrics concurrently
-            const [analysis, lyricsData] = await Promise.all([
-                analyzeAudio(inspectFile, { includeSignal: true, includeFingerprint: true, includeAiProvenance: true, topKGenres: 5 }),
-                extractLyricsFromMp3(inspectFile).catch(() => ({ content_rating: null }))
-            ]);
+            const analysis = await analyzeAudio(inspectFile, {
+                includeSignal: true,
+                includeFingerprint: true,
+                includeAiProvenance: true,
+                topKGenres: 5,
+            });
 
-            renderDashboard(analysis, lyricsData.content_rating);
+            renderDashboard(analysis, analysis.content_rating);
 
             auditHud.classList.remove('busy');
             auditHud.classList.add('success');
@@ -213,8 +214,10 @@ export function initInspectorModule() {
         }
 
         const breakdown = safety.category_breakdown || {};
-        profanityScore.textContent = `${safety.matched_count || breakdown.profanity || 0} hits`;
-        sexualScore.textContent = `${breakdown.sexual || 0} hits`;
+        const profHits = breakdown.profanity ?? safety.matched_count ?? 0;
+        const sexHits = breakdown.sexual ?? breakdown.sexual_content ?? (Array.isArray(safety.categories) && safety.categories.includes('sexual_content') ? 1 : 0);
+        profanityScore.textContent = `${profHits} hits`;
+        sexualScore.textContent = `${sexHits} hits`;
 
         // ── Card 4: Musical DNA & Acoustic Profile ──
         const bpmVal = document.getElementById('card-bpm-val');
@@ -250,10 +253,10 @@ export function initInspectorModule() {
         energyBar.style.width = `${energyPct}%`;
 
         const dance = data.danceability ?? data.tier_breakdown?.tier2_signal?.danceability;
-        danceVal.textContent = dance ? `${Math.round(dance * 100)}%` : '--';
+        danceVal.textContent = dance != null ? `${Math.round(dance * 100)}%` : '--';
 
         const lufs = data.loudness_lufs ?? data.tier_breakdown?.tier2_signal?.loudness_lufs;
-        lufsVal.textContent = lufs ? `${lufs.toFixed(1)} LUFS` : '--';
+        lufsVal.textContent = lufs != null ? `${lufs.toFixed(1)} LUFS` : '--';
 
         genresList.innerHTML = '';
         const neural = data.tier_breakdown?.tier3_neural?.top_genres || data.neural_genres || [];
@@ -261,23 +264,40 @@ export function initInspectorModule() {
         if (neural.length) {
             neural.slice(0, 4).forEach(g => {
                 const genreName = g.genre || g.name || 'Genre';
-                const score = g.score ?? g.probability ?? 0;
+                const score = g.confidence ?? g.score ?? g.probability ?? 0;
                 const pct = Math.round(score * 100);
                 const row = document.createElement('div');
                 row.className = 'meter-row';
-                row.innerHTML = `
-                    <div class="meter-header">
-                        <span>${genreName}</span>
-                        <span>${pct}%</span>
-                    </div>
-                    <div class="meter-track">
-                        <div class="meter-fill meter-fill--purple" style="width: ${pct}%;"></div>
-                    </div>
-                `;
+
+                const header = document.createElement('div');
+                header.className = 'meter-header';
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = genreName;
+                const pctSpan = document.createElement('span');
+                pctSpan.textContent = `${pct}%`;
+                header.append(nameSpan, pctSpan);
+
+                const track = document.createElement('div');
+                track.className = 'meter-track';
+                const fill = document.createElement('div');
+                fill.className = 'meter-fill meter-fill--purple';
+                fill.style.width = `${pct}%`;
+                track.appendChild(fill);
+
+                row.append(header, track);
                 genresList.appendChild(row);
             });
         } else if (data.primary_genre) {
-            genresList.innerHTML = `<div class="stat-row"><span class="stat-name">Genre</span><span class="stat-val accent-cyan">${data.primary_genre}</span></div>`;
+            const row = document.createElement('div');
+            row.className = 'stat-row';
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'stat-name';
+            labelSpan.textContent = 'Genre';
+            const valSpan = document.createElement('span');
+            valSpan.className = 'stat-val accent-cyan';
+            valSpan.textContent = data.primary_genre;
+            row.append(labelSpan, valSpan);
+            genresList.appendChild(row);
         }
     }
 }

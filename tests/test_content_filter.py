@@ -50,6 +50,8 @@ class TestContentFilter:
         assert res["is_explicit"] is True
         assert res["rating"] == "explicit"
         assert "sexual_content" in res["categories"]
+        assert res["category_breakdown"]["sexual_content"] >= 1
+        assert res["category_breakdown"]["sexual"] >= 1
 
     def test_hate_speech(self):
         lyrics = "Some hateful line with a slur faggot here."
@@ -57,6 +59,7 @@ class TestContentFilter:
         assert res["is_explicit"] is True
         assert res["rating"] == "explicit"
         assert "hate_speech" in res["categories"]
+        assert res["category_breakdown"]["hate_speech"] >= 1
 
     def test_violence(self):
         lyrics = "I will slit your throat in a bloodbath."
@@ -64,3 +67,4 @@ class TestContentFilter:
         assert res["is_explicit"] is True
         assert res["rating"] == "explicit"
         assert "violence" in res["categories"]
+        assert res["category_breakdown"]["violence"] >= 1

@@ -101,6 +101,9 @@ def classify_audio_genre(
     top_k: int = 5,
     offset: float = 15.0,
     duration: float = 30.0,
+    *,
+    y: Optional[np.ndarray] = None,
+    sr: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Classify audio into Discogs music genres using the EffNet ONNX model.
@@ -127,10 +130,14 @@ def classify_audio_genre(
         }
 
     try:
-        # 1. Load up to 30s of audio at 16,000 Hz
-        y, sr = librosa.load(audio_path, sr=16000, offset=offset, duration=duration)
-        if len(y) == 0:
-            y, sr = librosa.load(audio_path, sr=16000, offset=0.0, duration=duration)
+        # 1. Load up to 30s of audio at 16,000 Hz (or resample preloaded audio)
+        if y is None or sr is None:
+            y, sr = librosa.load(audio_path, sr=16000, offset=offset, duration=duration)
+            if len(y) == 0:
+                y, sr = librosa.load(audio_path, sr=16000, offset=0.0, duration=duration)
+        elif sr != 16000 and len(y) > 0:
+            y = librosa.resample(y, orig_sr=sr, target_sr=16000)
+            sr = 16000
 
         if len(y) < 16000:  # Less than 1 second
             return {
