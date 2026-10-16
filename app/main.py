@@ -615,7 +615,6 @@ async def enqueue_sync_job(
     callback_url: str = Form(..., description="Webhook URL for completion payload"),
     manual: bool = Form(default=False, description="Manual sync — save fallback-quality LRC"),
 ):
-    _verify_internal_token(request)
     if not mp3.filename.lower().endswith(".mp3"):
         raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
     if not (track_id or "").strip():

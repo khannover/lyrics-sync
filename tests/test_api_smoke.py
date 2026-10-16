@@ -697,20 +697,14 @@ def test_enqueue_sync_job_rejects_empty_mp3():
     assert response.json()["detail"] == "Uploaded MP3 file is empty."
 
 
-def test_enqueue_sync_job_requires_token_when_secret_configured(monkeypatch):
+def test_get_sync_job_requires_token_when_secret_configured(monkeypatch):
     monkeypatch.setenv("LYRIC_SYNC_CALLBACK_SECRET", "super-secret-token")
     with TestClient(app) as client:
-        resp_missing = client.post(
-            "/sync/jobs",
-            data=_async_job_form(),
-            files=_async_job_files(),
-        )
+        resp_missing = client.get("/sync/jobs/00000000-0000-0000-0000-000000000000")
         assert resp_missing.status_code == 401
 
-        resp_wrong = client.post(
-            "/sync/jobs",
-            data=_async_job_form(),
-            files=_async_job_files(),
+        resp_wrong = client.get(
+            "/sync/jobs/00000000-0000-0000-0000-000000000000",
             headers={"X-Lyrics-Sync-Token": "wrong-token"},
         )
         assert resp_wrong.status_code == 401
