@@ -304,13 +304,29 @@ def _normalize(text: str) -> str:
     return " ".join(token for token in (_normalize_token(t) for t in _tokenize(text)) if token)
 
 
+_QUOTED_SPEECH_RE = re.compile(r'["“„]([^"”‟]{2,})["”‟]')
+_BRACKET_INLINE_RE = re.compile(r"\[[^\]]*\]|\([^\)]*\)")
+
+
+def _extract_marker_speech(text: str) -> str:
+    """Extract quoted spoken words from bracketed/parenthesized stage cues like [Spoken intro: \"...\"]."""
+    clean = text.strip()
+    if not ((clean.startswith("[") and clean.endswith("]")) or (clean.startswith("(") and clean.endswith(")"))):
+        return ""
+    matches = [m.strip() for m in _QUOTED_SPEECH_RE.findall(clean) if m.strip()]
+    return " ".join(matches)
+
+
 def _lyric_word_entries(lyrics_lines: List[str]) -> List[dict]:
     entries = []
     for line_idx, line in enumerate(lyrics_lines):
+        source_text = line
         if _is_marker(line):
-            continue
+            source_text = _extract_marker_speech(line)
+            if not source_text:
+                continue
         word_idx = 0
-        for raw in _tokenize(line):
+        for raw in _tokenize(source_text):
             normalized = _normalize_token(raw)
             if not normalized:
                 continue
@@ -343,12 +359,31 @@ def _whisper_entries(whisper_words: List[dict]) -> List[dict]:
     return entries
 
 
+def _strip_markers_for_language_detection(lyrics_text: str) -> str:
+    cleaned_lines = []
+    for raw_line in lyrics_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _is_marker(line):
+            spoken = _extract_marker_speech(line)
+            if spoken:
+                cleaned_lines.append(spoken)
+            continue
+        line = _BRACKET_INLINE_RE.sub(" ", line).strip()
+        if line:
+            cleaned_lines.append(line)
+    return "\n".join(cleaned_lines) if cleaned_lines else lyrics_text
+
+
 def _detect_language_hint(lyrics_text: Optional[str]) -> Optional[str]:
     if not lyrics_text:
         return None
 
+    cleaned_text = _strip_markers_for_language_detection(lyrics_text)
+
     script_counts: Dict[str, int] = {}
-    for ch in lyrics_text:
+    for ch in cleaned_text:
         if ch.isspace():
             continue
         family = _script_family(ch)
@@ -362,23 +397,39 @@ def _detect_language_hint(lyrics_text: Optional[str]) -> Optional[str]:
     if len(non_latin_significant) == 1:
         return _SCRIPT_HINTS.get(non_latin_significant[0])
 
-    lower = f" {lyrics_text.casefold()} "
-    candidates = []
-    if any(w in lower for w in [" the ", " and ", " you ", " are ", " this "]):
-        candidates.append("en")
-    if any(w in lower for w in [" que ", " el ", " la ", " con ", " los ", " para "]):
-        candidates.append("es")
-    if any(w in lower for w in [" der ", " die ", " das ", " und ", " ist ", " ich "]):
-        candidates.append("de")
-    if any(w in lower for w in [" le ", " et ", " les ", " une ", " dans "]):
-        candidates.append("fr")
-    if any(w in lower for w in [" che ", " il ", " un ", " non ", " per "]):
-        candidates.append("it")
-    if any(w in lower for w in [" não ", " você ", " vocês ", " coração ", " também "]):
-        candidates.append("pt")
+    tokens = [t.casefold() for t in _tokenize(cleaned_text)]
+    if not tokens:
+        return None
 
-    candidates = list(dict.fromkeys(candidates))
-    return candidates[0] if len(candidates) == 1 else None
+    stopwords = {
+        "en": {"the", "and", "you", "are", "this", "with", "for", "that", "from", "your"},
+        "es": {"que", "el", "la", "con", "los", "para", "por", "una", "del", "las"},
+        "de": {"der", "die", "das", "und", "ist", "ich", "nicht", "ein", "mit", "auf", "wir", "du", "dem", "den"},
+        "fr": {"le", "et", "les", "une", "dans", "des", "est", "pour", "pas", "sur"},
+        "it": {"che", "il", "un", "non", "per", "una", "con", "sono", "della", "nel"},
+        "pt": {"não", "você", "vocês", "coração", "também", "uma", "com", "para", "dos"},
+    }
+
+    scores: Dict[str, int] = {}
+    for lang, words in stopwords.items():
+        count = sum(1 for tok in tokens if tok in words)
+        if count > 0:
+            scores[lang] = count
+
+    if any(ch in cleaned_text.casefold() for ch in ("ä", "ö", "ü", "ß")) and "de" in scores:
+        scores["de"] += 2
+
+    if not scores:
+        return None
+    if len(scores) == 1:
+        return next(iter(scores))
+
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    best_lang, best_score = ranked[0]
+    second_score = ranked[1][1]
+    if best_score >= 3 and best_score >= second_score * 2:
+        return best_lang
+    return None
 
 
 def _build_initial_prompt(lyrics_text: Optional[str]) -> Optional[str]:
@@ -402,6 +453,45 @@ def _is_marker(text: str) -> bool:
     return False
 
 
+def _build_contiguous_clip_timestamps(duration_ms: int, window_sec: float = 30.0) -> Optional[List[float]]:
+    """Build contiguous [start, end, ...] windows so faster-whisper cannot skip 30s on single_timestamp_ending."""
+    if duration_ms <= 0:
+        return None
+    duration_sec = round(duration_ms / 1000.0, 2)
+    if duration_sec <= window_sec:
+        return None
+    clips: List[float] = []
+    pos = 0.0
+    while pos + 0.25 < duration_sec:
+        end = min(round(pos + window_sec, 2), duration_sec)
+        clips.extend([round(pos, 2), end])
+        pos = end
+    return clips if len(clips) >= 2 else None
+
+
+def _dedupe_hallucinated_words(words: List[dict], max_consecutive: int = 2, max_gap_sec: float = 1.5) -> List[dict]:
+    """Filter out Whisper repetition loops (>max_consecutive identical tokens in a row)."""
+    cleaned: List[dict] = []
+    streak_norm = ""
+    streak_count = 0
+    prev_end = 0.0
+    for item in words:
+        norm = _normalize_token(str(item.get("word") or ""))
+        start = float(item.get("start") or 0.0)
+        end = float(item.get("end") or start)
+        if norm and norm == streak_norm and (start - prev_end) <= max_gap_sec:
+            streak_count += 1
+            if streak_count > max_consecutive:
+                prev_end = end
+                continue
+        else:
+            streak_norm = norm
+            streak_count = 1
+        prev_end = end
+        cleaned.append(item)
+    return cleaned
+
+
 def _transcribe_with_word_timestamps(
     wav_path: str,
     lyrics_text: str = None,
@@ -417,7 +507,8 @@ def _transcribe_with_word_timestamps(
     """
     model = _get_model()
     language = _detect_language_hint(lyrics_text)
-    initial_prompt = _build_initial_prompt(lyrics_text)
+    duration_ms = _get_audio_duration_ms(wav_path) if not vad_filter else 0
+    clip_timestamps = _build_contiguous_clip_timestamps(duration_ms) if not vad_filter else None
 
     _job_log(
         job_id,
@@ -426,30 +517,39 @@ def _transcribe_with_word_timestamps(
         language_hint=language or "auto",
         beam_size=beam_size,
         vad_filter=vad_filter,
-        prompt=(initial_prompt[:50] + "...") if initial_prompt else "none",
+        windows=(len(clip_timestamps) // 2) if clip_timestamps else "auto",
     )
     started = time.monotonic()
 
-    segments, info = model.transcribe(
-        wav_path,
-        beam_size=beam_size,
-        word_timestamps=True,
-        language=language,
-        initial_prompt=initial_prompt,
-        vad_filter=vad_filter,
-    )
+    transcribe_kwargs: Dict[str, Any] = {
+        "beam_size": beam_size,
+        "word_timestamps": True,
+        "language": language,
+        "initial_prompt": None,
+        "condition_on_previous_text": False,
+        "temperature": 0.0,
+        "repetition_penalty": 1.2,
+        "no_repeat_ngram_size": 3,
+        "vad_filter": vad_filter,
+    }
+    if clip_timestamps is not None:
+        transcribe_kwargs["clip_timestamps"] = clip_timestamps
 
-    words = []
+    segments, info = model.transcribe(wav_path, **transcribe_kwargs)
+
+    raw_words = []
     for segment in segments:
         if segment.words:
             for word in segment.words:
-                words.append(
+                raw_words.append(
                     {
                         "word": word.word.strip(),
                         "start": word.start,
                         "end": word.end,
                     }
                 )
+
+    words = _dedupe_hallucinated_words(raw_words)
 
     elapsed = time.monotonic() - started
     _job_log(
@@ -685,7 +785,9 @@ def _align_lines_to_words(lyrics_lines: List[str], whisper_words: List[dict]) ->
 
     lyric_word_to_whisper = {}
     for l_idx, candidates in lyric_word_to_whisper_candidates.items():
-        lyric_word_to_whisper[l_idx] = int(np.median(candidates))
+        lyric_word_to_whisper[l_idx] = int(
+            min(candidates, key=lambda w_idx: (round(float(dist_matrix[l_idx][w_idx]), 2), w_idx))
+        )
 
     line_whisper_idx_candidates = {}
     word_timings: List[WordTiming] = []

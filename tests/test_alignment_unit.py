@@ -89,3 +89,71 @@ def test_align_lyrics_to_audio_fallback_builds_proportional_word_timings(monkeyp
     assert payload["timestamp_mode"] == "word"
     assert payload["lines"][0]["words"]
     assert payload["lines"][0]["words"][0]["matched"] is False
+
+
+def test_detect_language_hint_ignores_english_stage_directions_in_german_song():
+    lyrics = """[Style: Electro Swing, Fast Beat]
+[Intro: The DJ drops the bass and you hear the crowd]
+Der Postbote klingelt sturm um acht
+Ich hab die Tür noch nicht mal aufgemacht
+Und das Paket fliegt durch den Raum"""
+    assert _detect_language_hint(lyrics) == "de"
+
+
+def test_align_lines_to_words_extracts_spoken_quotes_from_marker_lines():
+    lines = [
+        '[Spoken intro: "Ey verpiss dich mal von meinem Tisch"]',
+        "Wein glitzert golden in der Nacht",
+    ]
+    whisper_words = [
+        {"word": "Ey", "start": 0.12, "end": 0.30},
+        {"word": "verpiss", "start": 0.32, "end": 0.78},
+        {"word": "dich", "start": 0.80, "end": 1.00},
+        {"word": "mal", "start": 1.02, "end": 1.20},
+        {"word": "von", "start": 1.22, "end": 1.40},
+        {"word": "meinem", "start": 1.42, "end": 1.80},
+        {"word": "Tisch", "start": 1.82, "end": 2.20},
+        {"word": "Wein", "start": 22.82, "end": 23.20},
+        {"word": "glitzert", "start": 23.25, "end": 23.80},
+        {"word": "golden", "start": 23.85, "end": 24.30},
+        {"word": "in", "start": 24.35, "end": 24.50},
+        {"word": "der", "start": 24.55, "end": 24.75},
+        {"word": "Nacht", "start": 24.80, "end": 25.30},
+    ]
+    result = _align_lines_to_words(lines, whisper_words)
+    assert result.lines[0][1] == 120
+    assert result.lines[1][1] == 22820
+
+
+def test_align_lines_to_words_picks_best_candidate_instead_of_median_across_gap():
+    lines = [
+        "von meinem Tisch",
+        "Wein glitzert",
+    ]
+    whisper_words = [
+        {"word": "von", "start": 1.00, "end": 1.20},
+        {"word": "meinem", "start": 1.25, "end": 1.50},
+        {"word": "Tisch", "start": 1.55, "end": 1.85},
+        {"word": "noise", "start": 5.00, "end": 5.30},
+        {"word": "echo", "start": 9.00, "end": 9.30},
+        {"word": "Wein", "start": 22.82, "end": 23.20},
+        {"word": "glitzert", "start": 23.25, "end": 23.80},
+    ]
+    result = _align_lines_to_words(lines, whisper_words)
+    assert result.lines[1][1] == 22820
+
+
+def test_build_contiguous_clip_timestamps_and_dedupe():
+    clips = alignment._build_contiguous_clip_timestamps(75_000)
+    assert clips == [0.0, 30.0, 30.0, 60.0, 60.0, 75.0]
+
+    raw = [
+        {"word": "Auge", "start": 10.0, "end": 10.2},
+        {"word": "Auge", "start": 10.3, "end": 10.5},
+        {"word": "Auge", "start": 10.6, "end": 10.8},
+        {"word": "Auge", "start": 10.9, "end": 11.1},
+        {"word": "weiter", "start": 11.5, "end": 11.9},
+    ]
+    deduped = alignment._dedupe_hallucinated_words(raw)
+    assert [w["word"] for w in deduped] == ["Auge", "Auge", "weiter"]
+
