@@ -306,6 +306,23 @@ def _normalize(text: str) -> str:
 
 _QUOTED_SPEECH_RE = re.compile(r'["“„]([^"”‟]{2,})["”‟]')
 _BRACKET_INLINE_RE = re.compile(r"\[[^\]]*\]|\([^\)]*\)")
+_SQUARE_BRACKET_INLINE_RE = re.compile(r"\[[^\]]*\]")
+_PAREN_STAGE_CUE_RE = re.compile(
+    r"\(\s*(?:"
+    r"x\s*\d+|\d+\s*x|"
+    r"repeat(?:\s+x?\d+)?|"
+    r"instrumental(?:\s+\w+)?|"
+    r"(?:guitar|drum|synth|bass|piano|sax|violin|trumpet)?\s*solo|"
+    r"chorus|verse(?:\s*\d+)?|bridge|outro|intro|hook|pre-?chorus|refrain|"
+    r"fade\s+out|spoken|whispered|ad[- ]?libs?"
+    r")\s*\)",
+    re.IGNORECASE,
+)
+_LEADING_SECTION_LABEL_RE = re.compile(
+    r"^\s*(?:verse|chorus|bridge|intro|outro|hook|pre-?chorus|refrain|strophe|part)\s*\d*\s*:\s*",
+    re.IGNORECASE,
+)
+_REPEATED_CHAR_RE = re.compile(r"(.)\1+")
 
 
 def _extract_marker_speech(text: str) -> str:
@@ -317,14 +334,57 @@ def _extract_marker_speech(text: str) -> str:
     return " ".join(matches)
 
 
+def _strip_inline_stage_markers(text: str) -> str:
+    """
+    Strip inline structural/stage tags like [Verse 1], [x2], (x2), (Guitar Solo), or 'Chorus:'
+    while keeping quoted speech inside brackets and sung backing vocals in parentheses.
+    """
+    if not text:
+        return ""
+    if _is_marker(text):
+        return _extract_marker_speech(text)
+
+    def _replace_square_bracket(match: re.Match) -> str:
+        spoken = _extract_marker_speech(match.group(0))
+        return f" {spoken} " if spoken else " "
+
+    cleaned = _SQUARE_BRACKET_INLINE_RE.sub(_replace_square_bracket, text)
+    cleaned = _PAREN_STAGE_CUE_RE.sub(" ", cleaned)
+    cleaned = _LEADING_SECTION_LABEL_RE.sub("", cleaned)
+    return cleaned.strip()
+
+
+def _phonetic_normalize(word: str) -> str:
+    """
+    Lightweight phonetic normalization for sung words across EN/DE/ES/FR:
+    collapses elongated vowels/consonants ('loooove' -> 'love') and unifies common
+    grapheme equivalents ('ph' -> 'f', 'ck' -> 'k', 'dt' -> 't', 'th' -> 't', 'sh'/'sch' -> 's').
+    """
+    if not word:
+        return ""
+    s = word.casefold()
+    s = (
+        s.replace("sch", "s")
+        .replace("sh", "s")
+        .replace("ph", "f")
+        .replace("ck", "k")
+        .replace("dt", "t")
+        .replace("th", "t")
+        .replace("tz", "z")
+        .replace("qu", "kw")
+    )
+    if len(s) >= 5 and s.endswith("ing"):
+        s = s[:-1]
+    s = _REPEATED_CHAR_RE.sub(r"\1", s)
+    return s
+
+
 def _lyric_word_entries(lyrics_lines: List[str]) -> List[dict]:
     entries = []
     for line_idx, line in enumerate(lyrics_lines):
-        source_text = line
-        if _is_marker(line):
-            source_text = _extract_marker_speech(line)
-            if not source_text:
-                continue
+        source_text = _strip_inline_stage_markers(line)
+        if not source_text:
+            continue
         word_idx = 0
         for raw in _tokenize(source_text):
             normalized = _normalize_token(raw)
@@ -333,6 +393,7 @@ def _lyric_word_entries(lyrics_lines: List[str]) -> List[dict]:
             entries.append(
                 {
                     "normalized": normalized,
+                    "phonetic": _phonetic_normalize(normalized),
                     "word": raw.strip(),
                     "line_index": line_idx,
                     "word_index": word_idx,
@@ -352,6 +413,7 @@ def _whisper_entries(whisper_words: List[dict]) -> List[dict]:
             {
                 "word": str(item.get("word") or "").strip(),
                 "normalized": normalized,
+                "phonetic": _phonetic_normalize(normalized),
                 "start": float(item.get("start") or 0.0),
                 "end": float(item.get("end") or item.get("start") or 0.0),
             }
@@ -700,6 +762,304 @@ def _build_proportional_word_timings(
     return timings
 
 
+def _word_lexical_similarity(
+    w1: str,
+    w2: str,
+    p1: Optional[str] = None,
+    p2: Optional[str] = None,
+) -> float:
+    if not w1 or not w2:
+        return 0.0
+    if w1 == w2:
+        return 1.0
+    p1 = p1 if p1 is not None else _phonetic_normalize(w1)
+    p2 = p2 if p2 is not None else _phonetic_normalize(w2)
+    if p1 and p1 == p2 and len(p1) >= 2:
+        return 0.94
+
+    seq_raw = SequenceMatcher(None, w1, w2).ratio()
+    seq_phon = SequenceMatcher(None, p1, p2).ratio() if (p1 and p2) else seq_raw
+    base = max(seq_raw, (0.45 * seq_raw) + (0.55 * seq_phon))
+
+    prefix_bonus = 0.0
+    if len(w1) >= 3 and len(w2) >= 3 and (w1[:3] == w2[:3] or (p1 and p2 and p1[:3] == p2[:3])):
+        prefix_bonus = 0.08
+    elif len(w1) >= 2 and len(w2) >= 2 and (w1[:2] == w2[:2] or (p1 and p2 and p1[:2] == p2[:2])):
+        prefix_bonus = 0.04
+
+    if min(len(w1), len(w2)) == 1 and max(len(w1), len(w2)) >= 4:
+        base *= 0.65
+
+    return float(min(1.0, base + prefix_bonus))
+
+
+def _build_word_cost_matrix(
+    lyrics_word_entries: List[dict],
+    whisper_entries: List[dict],
+) -> Tuple[np.ndarray, np.ndarray, int]:
+    """
+    Build (lexical_dist, dtw_cost_matrix, vocab_size) using character unigrams,
+    boundary-padded character bigrams, phonetic bigrams, prefix bigrams, and a
+    soft relative-position prior to prevent long-range stopword/anagram jumps.
+    """
+    feature_vocab: Dict[Tuple[str, str], int] = {}
+
+    def _extract_features(entry: dict) -> List[Tuple[Tuple[str, str], float]]:
+        w = entry["normalized"]
+        p = entry.get("phonetic") or _phonetic_normalize(w)
+        feats: List[Tuple[Tuple[str, str], float]] = []
+        for ch in w:
+            feats.append((("u", ch), 0.45))
+        padded_w = f"^{w}$"
+        for i in range(len(padded_w) - 1):
+            feats.append((("b", padded_w[i : i + 2]), 1.15))
+        if p:
+            padded_p = f"^{p}$"
+            for i in range(len(padded_p) - 1):
+                feats.append((("p", padded_p[i : i + 2]), 0.90))
+        if len(w) >= 2:
+            feats.append((("pre", w[:2]), 0.70))
+        if len(w) >= 3:
+            feats.append((("pre3", w[:3]), 0.55))
+        return feats
+
+    lyric_feats = [_extract_features(entry) for entry in lyrics_word_entries]
+    whisper_feats = [_extract_features(entry) for entry in whisper_entries]
+
+    for flist in lyric_feats:
+        for key, _weight in flist:
+            if key not in feature_vocab:
+                feature_vocab[key] = len(feature_vocab)
+    for flist in whisper_feats:
+        for key, _weight in flist:
+            if key not in feature_vocab:
+                feature_vocab[key] = len(feature_vocab)
+
+    vocab_size = len(feature_vocab)
+    if vocab_size == 0:
+        return np.zeros((0, 0), dtype=np.float32), np.zeros((0, 0), dtype=np.float32), 0
+
+    def _to_matrix(feats_list: List[List[Tuple[Tuple[str, str], float]]]) -> np.ndarray:
+        mat = np.zeros((len(feats_list), vocab_size), dtype=np.float32)
+        for row_idx, flist in enumerate(feats_list):
+            for key, weight in flist:
+                mat[row_idx, feature_vocab[key]] += weight
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0
+        mat /= norms
+        return mat
+
+    lyrics_vecs = _to_matrix(lyric_feats)
+    whisper_vecs = _to_matrix(whisper_feats)
+
+    sim_matrix = np.clip(lyrics_vecs @ whisper_vecs.T, 0.0, 1.0)
+
+    for l_idx, l_entry in enumerate(lyrics_word_entries):
+        lw = l_entry["normalized"]
+        lp = l_entry.get("phonetic") or ""
+        for w_idx, w_entry in enumerate(whisper_entries):
+            ww = w_entry["normalized"]
+            wp = w_entry.get("phonetic") or ""
+            if lw == ww:
+                sim_matrix[l_idx, w_idx] = 1.0
+            elif lp and lp == wp and len(lp) >= 2:
+                if sim_matrix[l_idx, w_idx] < 0.94:
+                    sim_matrix[l_idx, w_idx] = 0.94
+
+    lexical_dist = np.clip(1.0 - sim_matrix, 0.0, 1.0).astype(np.float64)
+    cost_matrix = lexical_dist.copy()
+
+    num_l = len(lyrics_word_entries)
+    num_w = len(whisper_entries)
+    if num_l >= 6 and num_w >= 6:
+        l_rel = np.linspace(0.0, 1.0, num_l, dtype=np.float64)
+        w_rel = np.linspace(0.0, 1.0, num_w, dtype=np.float64)
+        pos_diff = np.abs(l_rel[:, None] - w_rel[None, :])
+        short_mask = np.array(
+            [1.0 if len(entry["normalized"]) <= 2 else 0.0 for entry in lyrics_word_entries],
+            dtype=np.float64,
+        )[:, None]
+        base_penalty = 0.16 * np.maximum(0.0, pos_diff - 0.15)
+        short_penalty = 0.14 * short_mask * np.maximum(0.0, pos_diff - 0.10)
+        cost_matrix = cost_matrix + base_penalty + short_penalty
+
+    return lexical_dist, np.ascontiguousarray(cost_matrix, dtype=np.float64), vocab_size
+
+
+def _interpolate_line_word_timings(
+    lyrics_lines: List[str],
+    word_timings: List[WordTiming],
+    whisper_entries: List[dict],
+) -> Tuple[Dict[int, int], List[WordTiming]]:
+    """
+    Filter intra-line pre-gap/post-gap outliers, interpolate unmatched words smoothly
+    between surrounding matched anchor words, and derive coherent line start timestamps.
+    """
+    by_line: Dict[int, List[WordTiming]] = {}
+    for wt in word_timings:
+        by_line.setdefault(wt.line_index, []).append(wt)
+
+    line_timestamps: Dict[int, int] = {}
+    any_matched_in_song = any(wt.matched for wt in word_timings)
+    max_audio_ms = int(whisper_entries[-1]["end"] * 1000) if whisper_entries else 0
+
+    prev_line_end_ms = 0
+    for line_idx in sorted(by_line.keys()):
+        line_wt = by_line[line_idx]
+        if not line_wt:
+            continue
+
+        # Pre-gap outlier check: if the first matched word is stranded far before the
+        # rest of the line's matched words across an instrumental/noise break, demote it.
+        while True:
+            m_indices = [i for i, wt in enumerate(line_wt) if wt.matched]
+            if len(m_indices) < 2:
+                break
+            first_i = m_indices[0]
+            second_i = m_indices[1]
+            gap_ms = line_wt[second_i].start_ms - line_wt[first_i].end_ms
+            first_conf = float(line_wt[first_i].confidence or 0.0)
+            second_conf = float(line_wt[second_i].confidence or 0.0)
+            first_norm_len = len(_normalize_token(line_wt[first_i].word))
+            word_step = max(1, second_i - first_i)
+            if gap_ms > 2800 * word_step and (
+                first_conf + 0.10 < second_conf
+                or (gap_ms > 4500 and first_norm_len <= 3 and second_conf >= 0.70)
+            ):
+                line_wt[first_i].matched = False
+                continue
+            break
+
+        # Post-gap outlier check at the end of a line
+        while True:
+            m_indices = [i for i, wt in enumerate(line_wt) if wt.matched]
+            if len(m_indices) < 2:
+                break
+            last_i = m_indices[-1]
+            prev_i = m_indices[-2]
+            gap_ms = line_wt[last_i].start_ms - line_wt[prev_i].end_ms
+            last_conf = float(line_wt[last_i].confidence or 0.0)
+            prev_conf = float(line_wt[prev_i].confidence or 0.0)
+            word_step = max(1, last_i - prev_i)
+            if gap_ms > 3200 * word_step and last_conf + 0.15 < prev_conf:
+                line_wt[last_i].matched = False
+                continue
+            break
+
+        m_indices = [i for i, wt in enumerate(line_wt) if wt.matched]
+        if not m_indices:
+            if not any_matched_in_song:
+                raw_starts = [wt.start_ms for wt in line_wt if wt.start_ms > 0]
+                line_timestamps[line_idx] = min(raw_starts) if raw_starts else 0
+            continue
+
+        # Enforce monotonicity among matched words within the line
+        running_ms = max(0, prev_line_end_ms)
+        for idx in m_indices:
+            if line_wt[idx].start_ms < running_ms:
+                dur = max(60, line_wt[idx].end_ms - line_wt[idx].start_ms)
+                line_wt[idx].start_ms = running_ms
+                line_wt[idx].end_ms = running_ms + dur
+            if line_wt[idx].end_ms < line_wt[idx].start_ms:
+                line_wt[idx].end_ms = line_wt[idx].start_ms + 80
+            running_ms = line_wt[idx].start_ms
+
+        # Extrapolate leading unmatched words before first_m
+        first_m = m_indices[0]
+        if first_m > 0:
+            anchor_start = line_wt[first_m].start_ms
+            est_step = 200
+            earliest_allowed = max(0, prev_line_end_ms)
+            avail_span = max(0, anchor_start - earliest_allowed)
+            step = min(est_step, max(60, avail_span // max(1, first_m))) if avail_span > 0 else 0
+            start_base = max(earliest_allowed, anchor_start - (step * first_m))
+            for i in range(first_m):
+                w_start = start_base + (i * step)
+                w_end = min(anchor_start, w_start + max(60, step - 10))
+                line_wt[i].start_ms = int(w_start)
+                line_wt[i].end_ms = int(max(w_start + 50, w_end))
+
+        # Interpolate internal unmatched words between consecutive matched anchors
+        for pair_idx in range(len(m_indices) - 1):
+            left_i = m_indices[pair_idx]
+            right_i = m_indices[pair_idx + 1]
+            gap_count = right_i - left_i - 1
+            if gap_count <= 0:
+                continue
+            left_end = line_wt[left_i].end_ms
+            right_start = line_wt[right_i].start_ms
+            if right_start <= left_end:
+                left_end = line_wt[left_i].start_ms
+                right_start = max(left_end + gap_count * 70, line_wt[right_i].end_ms)
+            span_ms = max(gap_count * 60, right_start - left_end)
+            step = span_ms / float(gap_count + 1)
+            for offset in range(1, gap_count + 1):
+                cur_i = left_i + offset
+                w_start = int(round(left_end + (offset - 0.5) * step))
+                w_end = int(round(min(right_start, w_start + max(60.0, step * 0.85))))
+                line_wt[cur_i].start_ms = max(line_wt[cur_i - 1].start_ms, w_start)
+                line_wt[cur_i].end_ms = max(line_wt[cur_i].start_ms + 50, w_end)
+
+        # Extrapolate trailing unmatched words after last_m
+        last_m = m_indices[-1]
+        if last_m < len(line_wt) - 1:
+            trail_count = (len(line_wt) - 1) - last_m
+            anchor_end = line_wt[last_m].end_ms
+            step = 180
+            for offset in range(1, trail_count + 1):
+                cur_i = last_m + offset
+                w_start = anchor_end + (offset - 1) * step
+                w_end = w_start + step - 20
+                if max_audio_ms > 0:
+                    w_start = min(max_audio_ms, w_start)
+                    w_end = min(max_audio_ms, max(w_start + 50, w_end))
+                line_wt[cur_i].start_ms = int(w_start)
+                line_wt[cur_i].end_ms = int(w_end)
+
+        line_timestamps[line_idx] = int(line_wt[0].start_ms)
+        prev_line_end_ms = int(max(line_wt[-1].start_ms, line_wt[-1].end_ms))
+
+    # Interpolate completely unanchored lines between surrounding anchored lines
+    if any_matched_in_song:
+        non_marker_lines = [
+            i for i, line in enumerate(lyrics_lines) if i in by_line and not _is_marker(line)
+        ]
+        unanchored = [i for i in non_marker_lines if i not in line_timestamps]
+        for u_idx in unanchored:
+            prev_anchored = [i for i in non_marker_lines if i < u_idx and i in line_timestamps]
+            next_anchored = [i for i in non_marker_lines if i > u_idx and i in line_timestamps]
+            start_bound = (
+                max(wt.end_ms for wt in by_line[prev_anchored[-1]])
+                if prev_anchored
+                else 0
+            )
+            end_bound = (
+                line_timestamps[next_anchored[0]]
+                if next_anchored
+                else max(start_bound + 1500, max_audio_ms)
+            )
+            # Check how many consecutive unanchored lines sit in this gap
+            prev_a = prev_anchored[-1] if prev_anchored else -1
+            next_a = next_anchored[0] if next_anchored else len(lyrics_lines)
+            block = [i for i in non_marker_lines if prev_a < i < next_a and i not in line_timestamps]
+            if not block:
+                block = [u_idx]
+            span = max(len(block) * 400, end_bound - start_bound)
+            block_step = span // max(1, len(block) + 1)
+            for b_pos, b_line_idx in enumerate(block):
+                l_start = int(start_bound + (b_pos + 1) * block_step)
+                l_end = int(min( max(l_start + 300, end_bound), l_start + block_step))
+                line_timestamps[b_line_idx] = l_start
+                b_words = by_line.get(b_line_idx, [])
+                if b_words:
+                    w_step = max(70, (l_end - l_start) // max(1, len(b_words)))
+                    for w_pos, wt in enumerate(b_words):
+                        wt.start_ms = int(l_start + w_pos * w_step)
+                        wt.end_ms = int(max(wt.start_ms + 60, min(l_end, wt.start_ms + w_step)))
+
+    return line_timestamps, word_timings
+
+
 def _align_lines_to_words(lyrics_lines: List[str], whisper_words: List[dict]) -> StructuredAlignment:
     """
     Align user-provided lyrics lines to Whisper word timestamps via DTW.
@@ -728,50 +1088,26 @@ def _align_lines_to_words(lyrics_lines: List[str], whisper_words: List[dict]) ->
             word_timings=_empty_word_timings(lyrics_lines),
         )
 
-    all_chars = set()
-    for entry in lyrics_word_entries:
-        all_chars.update(entry["normalized"])
-    for entry in whisper_entries:
-        all_chars.update(entry["normalized"])
-    if not all_chars:
+    lexical_dist, cost_matrix, vocab_size = _build_word_cost_matrix(
+        lyrics_word_entries, whisper_entries
+    )
+    if vocab_size == 0 or cost_matrix.size == 0:
         logger.warning("Vocabulary is empty - returning zero timestamps")
         return StructuredAlignment(
             lines=[(line, 0) for line in lyrics_lines],
             word_timings=_empty_word_timings(lyrics_lines),
         )
 
-    vocab = {ch: i for i, ch in enumerate(sorted(all_chars))}
-    vocab_size = len(vocab)
-
-    def to_vec(word: str) -> np.ndarray:
-        vec = np.zeros(vocab_size, dtype=np.float32)
-        for ch in word:
-            if ch in vocab:
-                vec[vocab[ch]] += 1.0
-        norm = np.linalg.norm(vec)
-        if norm > 0:
-            vec /= norm
-        return vec
-
-    lyrics_vecs = np.array([to_vec(entry["normalized"]) for entry in lyrics_word_entries], dtype=np.float32)
-    whisper_vecs = np.array([to_vec(entry["normalized"]) for entry in whisper_entries], dtype=np.float32)
-    if lyrics_vecs.ndim == 1:
-        lyrics_vecs = lyrics_vecs.reshape(1, -1)
-    if whisper_vecs.ndim == 1:
-        whisper_vecs = whisper_vecs.reshape(1, -1)
-
     logger.info(
-        "Aligning %d lyric words vs %d whisper words (vocab size: %d, shapes: %s, %s)",
-        len(lyrics_vecs),
-        len(whisper_vecs),
+        "Aligning %d lyric words vs %d whisper words (feature vocab: %d, shape: %s)",
+        len(lyrics_word_entries),
+        len(whisper_entries),
         vocab_size,
-        lyrics_vecs.shape,
-        whisper_vecs.shape,
+        cost_matrix.shape,
     )
 
     try:
-        dist_matrix = cdist(lyrics_vecs, whisper_vecs, metric="euclidean")
-        alignment = dtw(dist_matrix, step_pattern="symmetric2")
+        alignment = dtw(cost_matrix, step_pattern="symmetric2")
     except ValueError as exc:
         logger.error("DTW failed: %s", exc)
         return StructuredAlignment(
@@ -779,17 +1115,46 @@ def _align_lines_to_words(lyrics_lines: List[str], whisper_words: List[dict]) ->
             word_timings=_empty_word_timings(lyrics_lines),
         )
 
-    lyric_word_to_whisper_candidates = {}
+    lyric_word_to_whisper_candidates: Dict[int, List[int]] = {}
     for l_idx, w_idx in zip(alignment.index1, alignment.index2):
-        lyric_word_to_whisper_candidates.setdefault(l_idx, []).append(w_idx)
+        lyric_word_to_whisper_candidates.setdefault(int(l_idx), []).append(int(w_idx))
 
-    lyric_word_to_whisper = {}
+    lyric_word_to_whisper: Dict[int, int] = {}
+    num_l = len(lyrics_word_entries)
     for l_idx, candidates in lyric_word_to_whisper_candidates.items():
-        lyric_word_to_whisper[l_idx] = int(
-            min(candidates, key=lambda w_idx: (round(float(dist_matrix[l_idx][w_idx]), 2), w_idx))
+        best_lex = min(float(lexical_dist[l_idx, w_idx]) for w_idx in candidates)
+        near_best = [
+            w_idx for w_idx in candidates if float(lexical_dist[l_idx, w_idx]) <= best_lex + 0.02
+        ]
+        if len(near_best) == 1 or best_lex <= 0.35:
+            lyric_word_to_whisper[l_idx] = int(
+                min(near_best, key=lambda w_idx: (round(float(cost_matrix[l_idx, w_idx]), 3), w_idx))
+            )
+        else:
+            # Unmatched word stretched horizontally across a gap: if it starts a new line,
+            # prefer the end of the gap rather than snapping back to the previous line.
+            cur_line = lyrics_word_entries[l_idx]["line_index"]
+            prev_line = lyrics_word_entries[l_idx - 1]["line_index"] if l_idx > 0 else cur_line
+            next_line = (
+                lyrics_word_entries[l_idx + 1]["line_index"] if l_idx + 1 < num_l else cur_line
+            )
+            if l_idx > 0 and cur_line != prev_line and cur_line == next_line:
+                lyric_word_to_whisper[l_idx] = int(near_best[-1])
+            else:
+                lyric_word_to_whisper[l_idx] = int(near_best[0])
+
+    # Identify vertical pileups (multiple lyric words mapped to the same Whisper token)
+    whisper_to_lyrics: Dict[int, List[int]] = {}
+    for lw_idx, w_idx in lyric_word_to_whisper.items():
+        whisper_to_lyrics.setdefault(w_idx, []).append(lw_idx)
+
+    best_lyric_for_whisper: Dict[int, int] = {}
+    for w_idx, lw_list in whisper_to_lyrics.items():
+        best_lyric_for_whisper[w_idx] = min(
+            lw_list,
+            key=lambda lw_idx: (round(float(lexical_dist[lw_idx, w_idx]), 3), lw_idx),
         )
 
-    line_whisper_idx_candidates = {}
     word_timings: List[WordTiming] = []
     for lw_idx, entry in enumerate(lyrics_word_entries):
         mapped_idx = lyric_word_to_whisper.get(lw_idx)
@@ -807,10 +1172,19 @@ def _align_lines_to_words(lyrics_lines: List[str], whisper_words: List[dict]) ->
             )
             continue
 
-        line_whisper_idx_candidates.setdefault(entry["line_index"], []).append(mapped_idx)
         whisper_entry = whisper_entries[mapped_idx]
-        dist = float(dist_matrix[lw_idx][mapped_idx])
-        confidence = round(max(0.0, 1.0 - (min(2.0, dist) / 2.0)), 3)
+        lex_d = float(lexical_dist[lw_idx, mapped_idx])
+        confidence = round(max(0.0, min(1.0, 1.0 - lex_d)), 3)
+        is_primary_owner = best_lyric_for_whisper.get(mapped_idx) == lw_idx
+        exact_or_phonetic = (
+            entry["normalized"] == whisper_entry["normalized"]
+            or (entry.get("phonetic") and entry.get("phonetic") == whisper_entry.get("phonetic"))
+        )
+        is_matched = bool(
+            (is_primary_owner and confidence >= 0.30)
+            or (exact_or_phonetic and confidence >= 0.75)
+            or (len(lyrics_word_entries) <= 4 and is_primary_owner and confidence >= 0.20)
+        )
         word_timings.append(
             WordTiming(
                 line_index=entry["line_index"],
@@ -818,16 +1192,14 @@ def _align_lines_to_words(lyrics_lines: List[str], whisper_words: List[dict]) ->
                 word=entry["word"],
                 start_ms=int(whisper_entry["start"] * 1000),
                 end_ms=int(whisper_entry["end"] * 1000),
-                matched=True,
+                matched=is_matched,
                 confidence=confidence,
             )
         )
 
-    line_timestamps = {}
-    for line_idx, idx_candidates in line_whisper_idx_candidates.items():
-        if idx_candidates:
-            w_idx = min(idx_candidates)
-            line_timestamps[line_idx] = int(whisper_entries[w_idx]["start"] * 1000)
+    line_timestamps, word_timings = _interpolate_line_word_timings(
+        lyrics_lines, word_timings, whisper_entries
+    )
 
     non_marker_lines = [i for i, line in enumerate(lyrics_lines) if not _is_marker(line) and _normalize(line)]
     non_marker_ts = [line_timestamps[i] for i in non_marker_lines if i in line_timestamps]
@@ -837,7 +1209,10 @@ def _align_lines_to_words(lyrics_lines: List[str], whisper_words: List[dict]) ->
             len(set(non_marker_ts)),
             len(non_marker_lines),
         )
-        lyric_words_per_line = [len(_normalize(lyrics_lines[i]).split()) for i in non_marker_lines]
+        lyric_words_per_line = [
+            max(1, len(_normalize(_strip_inline_stage_markers(lyrics_lines[i])).split()))
+            for i in non_marker_lines
+        ]
         total_lyric_words = sum(lyric_words_per_line)
         max_whisper_idx = len(whisper_entries) - 1
 
@@ -864,6 +1239,21 @@ def _align_lines_to_words(lyrics_lines: List[str], whisper_words: List[dict]) ->
         else:
             last_known_ts = result[i][1]
 
+    # Enforce non-decreasing timestamps across non-marker lines and sync word_timings
+    prev_non_marker_ts = -1
+    for i, (line, ts) in enumerate(result):
+        if _is_marker(line):
+            continue
+        if ts < prev_non_marker_ts:
+            delta = prev_non_marker_ts - ts
+            ts = prev_non_marker_ts
+            result[i][1] = ts
+            for wt in word_timings:
+                if wt.line_index == i:
+                    wt.start_ms += delta
+                    wt.end_ms += delta
+        prev_non_marker_ts = ts
+
     return StructuredAlignment(lines=[(line, ts) for line, ts in result], word_timings=word_timings)
 
 
@@ -872,34 +1262,62 @@ def _align_lines_progressive(lyrics_lines: List[str], whisper_words: List[dict])
     Progressive forward alignment fallback.
 
     For each non-marker lyric line, find the best matching forward window in
-    Whisper words using sequence similarity. This avoids DTW collapse cases.
+    Whisper words using lexical + phonetic similarity while avoiding runaway
+    cursor jumps when individual lines are missing in the transcription.
     """
     if not whisper_words:
         return StructuredAlignment(lines=[(line, 0) for line in lyrics_lines], word_timings=_empty_word_timings(lyrics_lines))
 
     whisper_entries = _whisper_entries(whisper_words)
     whisper_norm = [entry["normalized"] for entry in whisper_entries]
+    whisper_phon = [entry.get("phonetic") or _phonetic_normalize(entry["normalized"]) for entry in whisper_entries]
     if not whisper_norm:
         return StructuredAlignment(lines=[(line, 0) for line in lyrics_lines], word_timings=_empty_word_timings(lyrics_lines))
 
-    def _window_score(line_words: List[str], cand_words: List[str]) -> float:
+    def _window_score(
+        line_words: List[str],
+        line_phon: List[str],
+        cand_words: List[str],
+        cand_phon: List[str],
+    ) -> float:
         if not line_words or not cand_words:
             return 0.0
-        target = " ".join(line_words)
-        cand = " ".join(cand_words)
-        seq = SequenceMatcher(None, target, cand).ratio()
-        line_set = set(line_words)
-        cand_set = set(cand_words)
-        overlap = len(line_set.intersection(cand_set)) / max(1, len(line_set))
+        # Word-level lexical/phonetic match score (avoids character-level vowel/space inflation)
+        matched_sims: List[float] = []
+        used_cand: set[int] = set()
+        for lw, lp in zip(line_words, line_phon):
+            best_s = 0.0
+            best_c = -1
+            for c_idx, (cw, cp) in enumerate(zip(cand_words, cand_phon)):
+                if c_idx in used_cand:
+                    continue
+                s = _word_lexical_similarity(lw, cw, lp, cp)
+                if s > best_s:
+                    best_s = s
+                    best_c = c_idx
+            if best_c >= 0 and best_s >= 0.55:
+                used_cand.add(best_c)
+                matched_sims.append(best_s)
+            else:
+                matched_sims.append(0.0)
+
+        word_match_score = sum(matched_sims) / max(1, len(line_words))
+        strong_hits = sum(1 for s in matched_sims if s >= 0.70)
+        hit_ratio = strong_hits / max(1, len(line_words))
+
         first_word_bonus = 0.0
         if cand_words and line_words:
-            if cand_words[0] == line_words[0]:
+            s0 = _word_lexical_similarity(line_words[0], cand_words[0], line_phon[0], cand_phon[0])
+            if s0 >= 0.85:
                 first_word_bonus += 0.08
-            elif line_words[0] in cand_words[:2]:
+            elif len(cand_words) > 1 and _word_lexical_similarity(
+                line_words[0], cand_words[1], line_phon[0], cand_phon[1]
+            ) >= 0.85:
                 first_word_bonus += 0.04
-        return (0.62 * seq) + (0.38 * overlap) + first_word_bonus
 
-    line_ts = {}
+        return (0.60 * word_match_score) + (0.40 * hit_ratio) + first_word_bonus
+
+    line_ts: Dict[int, int] = {}
     word_timings: List[WordTiming] = []
     cursor = 0
     max_w = len(whisper_norm)
@@ -912,39 +1330,90 @@ def _align_lines_progressive(lyrics_lines: List[str], whisper_words: List[dict])
             continue
         line_entries = grouped.get(line_idx, [])
         line_words = [entry["normalized"] for entry in line_entries]
+        line_phon = [entry.get("phonetic") or _phonetic_normalize(entry["normalized"]) for entry in line_entries]
         if not line_words:
             continue
 
         lw_len = len(line_words)
         start_lo = min(cursor, max_w - 1)
-        start_hi = min(max_w - 1, start_lo + 240)
+        start_hi = min(max_w - 1, start_lo + 160)
         best_start = start_lo
         best_end = min(max_w, start_lo + max(1, lw_len))
+        best_raw_score = 0.0
         best_score = -1.0
+        base_time_sec = float(whisper_entries[start_lo]["start"])
 
         for start in range(start_lo, start_hi + 1):
-            for span in range(max(1, lw_len - 3), lw_len + 6):
+            jump_words = start - start_lo
+            time_gap_sec = max(0.0, float(whisper_entries[start]["start"]) - base_time_sec)
+            jump_penalty = (jump_words * 0.002) + (max(0.0, time_gap_sec - 15.0) * 0.004)
+            for span in range(max(1, lw_len - 2), lw_len + 5):
                 end = min(max_w, start + span)
                 if end <= start:
                     continue
-                score = _window_score(line_words, whisper_norm[start:end])
-                score_adj = score - ((start - start_lo) * 0.0004)
+                raw_score = _window_score(
+                    line_words,
+                    line_phon,
+                    whisper_norm[start:end],
+                    whisper_phon[start:end],
+                )
+                score_adj = raw_score - jump_penalty
                 if score_adj > best_score:
                     best_score = score_adj
+                    best_raw_score = raw_score
                     best_start = start
                     best_end = end
 
-        line_ts[line_idx] = int(whisper_entries[best_start]["start"] * 1000)
-        cursor = min(max_w - 1, best_start + max(1, lw_len - 1))
+        # Guard against jumping across the song on an unmappable / missed line
+        jump_distance = best_start - start_lo
+        time_jump_sec = max(0.0, float(whisper_entries[best_start]["start"]) - base_time_sec)
+        is_reliable_window = (
+            best_raw_score >= 0.42
+            or (jump_distance <= 4 and time_jump_sec <= 10.0 and best_raw_score >= 0.30)
+        )
+        if not is_reliable_window:
+            for entry in line_entries:
+                word_timings.append(
+                    WordTiming(
+                        line_index=line_idx,
+                        word_index=entry["word_index"],
+                        word=entry["word"],
+                        start_ms=0,
+                        end_ms=0,
+                        matched=False,
+                        confidence=round(max(0.0, best_raw_score), 3),
+                    )
+                )
+            continue
 
+        line_ts[line_idx] = int(whisper_entries[best_start]["start"] * 1000)
+        cursor = min(max_w - 1, best_start + max(1, (best_end - best_start) - 1))
+
+        # Align words monotonically inside the matched window [best_start, best_end)
+        win_cursor = best_start
         span = max(1, best_end - best_start)
         for idx, entry in enumerate(line_entries):
-            if span == 1:
-                w_idx = best_start
-            else:
+            best_w_idx = min(best_end - 1, win_cursor)
+            best_w_sim = -1.0
+            remaining_entries = max(1, len(line_entries) - idx)
+            search_hi = max(win_cursor + 1, best_end - remaining_entries + 2)
+            search_hi = min(best_end, search_hi)
+            for cand_w_idx in range(win_cursor, search_hi):
+                sim = _word_lexical_similarity(
+                    entry["normalized"],
+                    whisper_norm[cand_w_idx],
+                    entry.get("phonetic"),
+                    whisper_phon[cand_w_idx],
+                )
+                if sim > best_w_sim:
+                    best_w_sim = sim
+                    best_w_idx = cand_w_idx
+            if best_w_sim < 0.28 and span > 1:
                 offset = int(round(idx * ((span - 1) / max(1, len(line_entries) - 1))))
-                w_idx = min(best_end - 1, best_start + offset)
-            whisper_entry = whisper_entries[w_idx]
+                best_w_idx = min(best_end - 1, best_start + offset)
+            win_cursor = min(best_end - 1, best_w_idx + (1 if best_w_sim >= 0.45 else 0))
+            whisper_entry = whisper_entries[best_w_idx]
+            word_conf = round(max(0.0, min(1.0, 0.5 * best_raw_score + 0.5 * max(0.0, best_w_sim))), 3)
             word_timings.append(
                 WordTiming(
                     line_index=line_idx,
@@ -952,10 +1421,17 @@ def _align_lines_progressive(lyrics_lines: List[str], whisper_words: List[dict])
                     word=entry["word"],
                     start_ms=int(whisper_entry["start"] * 1000),
                     end_ms=int(whisper_entry["end"] * 1000),
-                    matched=True,
-                    confidence=round(max(0.0, min(1.0, best_score)), 3),
+                    matched=bool(best_w_sim >= 0.30 or best_raw_score >= 0.50),
+                    confidence=word_conf,
                 )
             )
+
+    interp_line_ts, word_timings = _interpolate_line_word_timings(
+        lyrics_lines, word_timings, whisper_entries
+    )
+    for k, v in interp_line_ts.items():
+        if k not in line_ts:
+            line_ts[k] = v
 
     result = []
     for i, line in enumerate(lyrics_lines):

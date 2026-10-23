@@ -157,3 +157,111 @@ def test_build_contiguous_clip_timestamps_and_dedupe():
     deduped = alignment._dedupe_hallucinated_words(raw)
     assert [w["word"] for w in deduped] == ["Auge", "Auge", "weiter"]
 
+
+def test_align_lines_to_words_rejects_anagram_false_match():
+    lines = [
+        "Warm intro words",
+        "Listen to the night",
+    ]
+    whisper_words = [
+        {"word": "warm", "start": 1.00, "end": 1.30},
+        {"word": "intro", "start": 1.35, "end": 1.70},
+        {"word": "words", "start": 1.75, "end": 2.10},
+        {"word": "silent", "start": 2.50, "end": 2.90},
+        {"word": "listen", "start": 12.00, "end": 12.40},
+        {"word": "to", "start": 12.45, "end": 12.60},
+        {"word": "the", "start": 12.65, "end": 12.80},
+        {"word": "night", "start": 12.85, "end": 13.30},
+    ]
+    result = _align_lines_to_words(lines, whisper_words)
+    assert result.lines[0][1] == 1000
+    assert result.lines[1][1] == 12000
+
+
+def test_align_lines_to_words_filters_pre_gap_outlier_word_from_line_timestamp():
+    lines = [
+        "Ich steh im Regen",
+        "Und der Wein glitzert golden",
+    ]
+    whisper_words = [
+        {"word": "Ich", "start": 1.00, "end": 1.20},
+        {"word": "steh", "start": 1.25, "end": 1.50},
+        {"word": "im", "start": 1.55, "end": 1.75},
+        {"word": "Regen", "start": 1.80, "end": 2.20},
+        # Whisper missed "Und" after a 20s instrumental gap and starts at "der"
+        {"word": "der", "start": 22.82, "end": 23.00},
+        {"word": "Wein", "start": 23.05, "end": 23.40},
+        {"word": "glitzert", "start": 23.45, "end": 23.95},
+        {"word": "golden", "start": 24.00, "end": 24.50},
+    ]
+    result = _align_lines_to_words(lines, whisper_words)
+    assert result.lines[0][1] == 1000
+    # Line 1 must anchor right before "der" (~22620ms), NOT back at "Regen" (1800ms)
+    assert 22000 <= result.lines[1][1] <= 22820
+    line1_words = [wt for wt in result.word_timings if wt.line_index == 1]
+    assert line1_words[0].word == "Und"
+    assert line1_words[0].matched is False
+    assert line1_words[0].start_ms == result.lines[1][1]
+    assert line1_words[1].word == "der"
+    assert line1_words[1].matched is True
+    assert line1_words[1].start_ms == 22820
+
+
+def test_lyric_word_entries_strips_inline_stage_cues_but_keeps_backing_vocals():
+    lines = [
+        "[Verse 1] Walking in the rain (x2)",
+        "Chorus: We shine (oh yeah) [Guitar Solo]",
+    ]
+    entries = alignment._lyric_word_entries(lines)
+    words_line0 = [e["normalized"] for e in entries if e["line_index"] == 0]
+    words_line1 = [e["normalized"] for e in entries if e["line_index"] == 1]
+    assert words_line0 == ["walking", "in", "the", "rain"]
+    assert words_line1 == ["we", "shine", "oh", "yeah"]
+
+
+def test_align_lines_to_words_phonetic_normalization_and_midline_interpolation():
+    lines = ["Yeah we loooove MysteryToken walkin' home"]
+    whisper_words = [
+        {"word": "yeah", "start": 5.00, "end": 5.30},
+        {"word": "we", "start": 5.35, "end": 5.55},
+        {"word": "love", "start": 5.60, "end": 6.00},
+        {"word": "walking", "start": 6.80, "end": 7.20},
+        {"word": "home", "start": 7.25, "end": 7.70},
+    ]
+    result = _align_lines_to_words(lines, whisper_words)
+    wt_by_word = {wt.word: wt for wt in result.word_timings}
+    assert wt_by_word["loooove"].matched is True
+    assert wt_by_word["walkin'"].matched is True
+    assert wt_by_word["MysteryToken"].matched is False
+    assert 6000 <= wt_by_word["MysteryToken"].start_ms <= 6800
+    assert wt_by_word["MysteryToken"].start_ms < wt_by_word["MysteryToken"].end_ms
+
+
+def test_align_lines_progressive_recovers_from_unmappable_line_without_jumping_cursor():
+    lines = [
+        "walking down the lonely street",
+        "completely unmappable phantom lyric line",
+        "shining bright under the moon",
+    ]
+    whisper_words = [
+        {"word": "walking", "start": 2.0, "end": 2.4},
+        {"word": "down", "start": 2.5, "end": 2.8},
+        {"word": "the", "start": 2.9, "end": 3.1},
+        {"word": "lonely", "start": 3.2, "end": 3.6},
+        {"word": "street", "start": 3.7, "end": 4.1},
+        {"word": "shining", "start": 8.0, "end": 8.4},
+        {"word": "bright", "start": 8.5, "end": 8.9},
+        {"word": "under", "start": 9.0, "end": 9.3},
+        {"word": "the", "start": 9.4, "end": 9.6},
+        {"word": "moon", "start": 9.7, "end": 10.2},
+        # Distant noise near the end of the song that shares a slight character overlap
+        {"word": "phantom", "start": 120.0, "end": 120.5},
+    ]
+    result = alignment._align_lines_progressive(lines, whisper_words)
+    assert result.lines[0][1] == 2000
+    # Line 1 was unmappable locally and must be interpolated between Line 0 (4.1s) and Line 2 (8.0s)
+    assert 4100 <= result.lines[1][1] < 8000
+    # Line 2 must still match at 8000ms instead of being pushed past 120000ms
+    assert result.lines[2][1] == 8000
+
+
