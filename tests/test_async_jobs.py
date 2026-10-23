@@ -343,3 +343,96 @@ def test_prune_jobs_and_evict_job():
     assert "j2" not in aj._jobs
     assert "t2" not in aj._track_jobs
     assert aj.evict_job("j2") is False
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_retries_with_backoff_and_recovers(tmp_path, monkeypatch):
+    monkeypatch.setattr(aj, "WORK_DIR", tmp_path / "work")
+    monkeypatch.setattr(aj, "CALLBACK_RETRIES", 3)
+    aj.WORK_DIR.mkdir(parents=True, exist_ok=True)
+
+    sleep_calls = []
+
+    async def _fast_sleep(delay):
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(aj.asyncio, "sleep", _fast_sleep)
+
+    attempts = []
+
+    class _MockResponse:
+        def __init__(self, status_code: int, text: str = ""):
+            self.status_code = status_code
+            self.text = text
+
+    class _MockAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            attempts.append((url, json, headers))
+            if len(attempts) < 3:
+                return _MockResponse(502, "bad gateway")
+            return _MockResponse(200, "ok")
+
+    monkeypatch.setattr(aj.httpx, "AsyncClient", _MockAsyncClient)
+
+    mp3_path, lyrics_path = _write_inputs(tmp_path)
+    job = aj.create_job(
+        track_id="retry-track",
+        callback_url="https://example.com/callback",
+        manual=False,
+        mp3_path=mp3_path,
+        lyrics_path=lyrics_path,
+    )
+    job.status = "completed"
+    job.lyrics_lrc = "[00:01.00]line one"
+    job.quality = "good"
+
+    ok = await aj._deliver_callback(job)
+    assert ok is True
+    assert len(attempts) == 3
+    assert len(sleep_calls) == 2
+    assert job.callback_status == aj.CALLBACK_DELIVERED
+    assert job.callback_attempts == 3
+    assert job.delivered_at is not None
+
+
+def test_ack_job_persists_state_across_restart(tmp_path, monkeypatch):
+    monkeypatch.setattr(aj, "WORK_DIR", tmp_path / "work")
+    aj.WORK_DIR.mkdir(parents=True, exist_ok=True)
+
+    mp3_path, lyrics_path = _write_inputs(tmp_path)
+    job = aj.create_job(
+        track_id="ack-track",
+        callback_url="https://example.com/callback",
+        manual=True,
+        mp3_path=mp3_path,
+        lyrics_path=lyrics_path,
+    )
+    job.status = "completed"
+    job.lyrics_lrc = "[00:02.00]acked line"
+    job.quality = "good"
+    aj._save_job(job)
+
+    acked = aj.ack_job(job.job_id)
+    assert acked is not None
+    assert acked["callback_status"] == aj.CALLBACK_ACKED
+    assert acked["acked_at"] is not None
+
+    # Simulate service restart
+    aj._jobs.clear()
+    aj._track_jobs.clear()
+    restored = aj.load_persisted_jobs()
+    assert restored == 1
+
+    reloaded = aj.get_job(job.job_id)
+    assert reloaded is not None
+    assert reloaded["callback_status"] == aj.CALLBACK_ACKED
+    assert reloaded["lyrics_lrc"] == "[00:02.00]acked line"
