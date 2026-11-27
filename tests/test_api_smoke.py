@@ -738,4 +738,72 @@ def test_sync_removes_job_dir_immediately(monkeypatch, tmp_path):
             },
         )
     assert response.status_code == 200
-    assert list(work.iterdir()) == []
+    assert list(work.iterdir()) == []
+
+
+def test_lyrics_extract_returns_multilingual_metadata_and_forwards_language_hint(monkeypatch, tmp_path):
+    from tests.test_sylt_writer import _SILENT_MP3_BYTES
+    from app.alignment import TextTranscriptionResult
+
+    work = tmp_path / "extract-work"
+    work.mkdir()
+    monkeypatch.setattr(main, "WORK_DIR", work)
+    monkeypatch.setattr(
+        main,
+        "extract_lyrics_from_mp3",
+        lambda _path: {
+            "plain_lyrics": None,
+            "timed_lyrics_lrc": None,
+            "genres": [],
+            "style_tags": [],
+            "style_prompt_raw": None,
+            "bpm": None,
+            "notes": None,
+        },
+    )
+
+    seen_languages = []
+
+    async def _fake_transcription(job_id, mp3_path, job_dir, *, language=None):
+        seen_languages.append(language)
+        return TextTranscriptionResult(
+            text="Je marche dans la nuit\nHold me closer now",
+            detected_language=language or "fr",
+            language_probability=0.8812,
+            multilingual=(language is None),
+            used_vocal_focus=True,
+        )
+
+    monkeypatch.setattr(main, "_run_transcription", _fake_transcription)
+
+    with TestClient(app) as client:
+        resp_auto = client.post(
+            "/lyrics/extract",
+            files={"mp3": ("chanson.mp3", _SILENT_MP3_BYTES, "audio/mpeg")},
+        )
+        assert resp_auto.status_code == 200
+        body_auto = resp_auto.json()
+        assert body_auto["source"] == "transcription"
+        assert body_auto["detected_language"] == "fr"
+        assert body_auto["language_probability"] == 0.881
+        assert body_auto["multilingual"] is True
+
+        resp_hint = client.post(
+            "/lyrics/extract",
+            files={"mp3": ("chanson.mp3", _SILENT_MP3_BYTES, "audio/mpeg")},
+            data={"language": "FR"},
+        )
+        assert resp_hint.status_code == 200
+        body_hint = resp_hint.json()
+        assert body_hint["detected_language"] == "fr"
+        assert body_hint["multilingual"] is False
+
+        resp_bad = client.post(
+            "/lyrics/extract",
+            files={"mp3": ("chanson.mp3", _SILENT_MP3_BYTES, "audio/mpeg")},
+            data={"language": "french-invalid"},
+        )
+        assert resp_bad.status_code == 400
+
+    assert seen_languages == [None, "fr"]
+

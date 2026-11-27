@@ -71,6 +71,15 @@ class TranscriptionPassResult:
     pass_name: str
 
 
+@dataclass
+class TextTranscriptionResult:
+    text: str
+    detected_language: Optional[str] = None
+    language_probability: Optional[float] = None
+    multilingual: bool = True
+    used_vocal_focus: bool = False
+
+
 MODEL_SIZE = os.environ.get("MODEL_SIZE", "base")
 COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
 CPU_THREADS = int(os.environ.get("WHISPER_CPU_THREADS", "4"))
@@ -587,6 +596,9 @@ def _transcribe_with_word_timestamps(
         "beam_size": beam_size,
         "word_timestamps": True,
         "language": language,
+        "multilingual": language is None,
+        "language_detection_segments": 4,
+        "language_detection_threshold": 0.6,
         "initial_prompt": None,
         "condition_on_previous_text": False,
         "temperature": 0.0,
@@ -1677,35 +1689,109 @@ def align_lyrics_to_audio(
     return result
 
 
-def transcribe_audio_to_text(mp3_path: str, job_dir: str, job_id: Optional[str] = None) -> str:
+def transcribe_audio_with_metadata(
+    mp3_path: str,
+    job_dir: str,
+    job_id: Optional[str] = None,
+    *,
+    language: Optional[str] = None,
+) -> TextTranscriptionResult:
+    """
+    Transcribe audio to plain text lyrics using faster-whisper.
+    Uses `vad_filter=False` on the primary pass because Silero VAD is trained on
+    spoken dialogue and aggressively strips singing over music mixes, and enables
+    per-segment `multilingual=True` when no explicit language hint is provided so
+    songs with long instrumental intros or mixed languages are handled accurately.
+    """
+    wav_path = _convert_to_wav(mp3_path, job_dir, job_id)
+    normalized_language = (language or "").strip().lower() or None
+    multilingual = normalized_language is None
+    model = _get_model()
+
+    def _run_pass(target_audio: str, *, vad_filter: bool, vocal_focus: bool) -> Tuple[List[str], Any]:
+        _job_log(
+            job_id,
+            "stage=transcribe_text_start",
+            vad_filter=vad_filter,
+            vocal_focus=vocal_focus,
+            language_hint=normalized_language or "auto",
+            multilingual=multilingual,
+        )
+        segments, info = model.transcribe(
+            target_audio,
+            beam_size=5,
+            word_timestamps=False,
+            vad_filter=vad_filter,
+            language=normalized_language,
+            multilingual=multilingual,
+            language_detection_segments=4,
+            language_detection_threshold=0.6,
+            condition_on_previous_text=False,
+            temperature=0.0,
+            repetition_penalty=1.2,
+            no_repeat_ngram_size=3,
+        )
+        lines: List[str] = []
+        for segment in segments:
+            line = segment.text.strip()
+            if line:
+                lines.append(line)
+        return lines, info
+
+    started = time.monotonic()
+    text_lines, info = _run_pass(wav_path, vad_filter=False, vocal_focus=False)
+    used_vocal_focus = False
+
+    # Fallback: if the primary pass produced very little text (e.g. buried vocals),
+    # retry once on vocal-focused audio and keep whichever pass yielded more words.
+    if len(text_lines) < 3:
+        focused_path = _create_vocal_focus_wav(wav_path, job_dir, job_id=job_id)
+        if focused_path:
+            _job_log(job_id, "stage=transcribe_text_retry", reason="sparse_first_pass", lines=len(text_lines))
+            retry_lines, retry_info = _run_pass(focused_path, vad_filter=False, vocal_focus=True)
+            primary_words = sum(len(line.split()) for line in text_lines)
+            retry_words = sum(len(line.split()) for line in retry_lines)
+            if retry_words > primary_words:
+                text_lines, info = retry_lines, retry_info
+                used_vocal_focus = True
+
+    elapsed = time.monotonic() - started
+    detected_language = getattr(info, "language", None)
+    raw_prob = getattr(info, "language_probability", None)
+    language_probability = float(raw_prob) if raw_prob is not None else None
+    _job_log(
+        job_id,
+        "stage=transcribe_text_done",
+        language=detected_language,
+        language_prob=f"{language_probability:.2f}" if language_probability is not None else "n/a",
+        multilingual=multilingual,
+        vocal_focus=used_vocal_focus,
+        lines=len(text_lines),
+        elapsed=f"{elapsed:.1f}s",
+    )
+    return TextTranscriptionResult(
+        text="\n".join(text_lines).strip(),
+        detected_language=detected_language,
+        language_probability=language_probability,
+        multilingual=multilingual,
+        used_vocal_focus=used_vocal_focus,
+    )
+
+
+def transcribe_audio_to_text(
+    mp3_path: str,
+    job_dir: str,
+    job_id: Optional[str] = None,
+    *,
+    language: Optional[str] = None,
+) -> str:
     """
     Transcribe audio to plain text lyrics using faster-whisper.
     Used as a fallback when no embedded lyrics are present.
     """
-    wav_path = _convert_to_wav(mp3_path, job_dir, job_id)
-    model = _get_model()
-
-    _job_log(job_id, "stage=transcribe_text_start", vad_filter=True)
-    started = time.monotonic()
-    segments, info = model.transcribe(
-        wav_path,
-        beam_size=5,
-        word_timestamps=False,
-        vad_filter=True,
-    )
-
-    text_lines = []
-    for segment in segments:
-        line = segment.text.strip()
-        if line:
-            text_lines.append(line)
-
-    elapsed = time.monotonic() - started
-    _job_log(
-        job_id,
-        "stage=transcribe_text_done",
-        language=info.language,
-        language_prob=f"{info.language_probability:.2f}",
-        elapsed=f"{elapsed:.1f}s",
-    )
-    return "\n".join(text_lines).strip()
+    return transcribe_audio_with_metadata(
+        mp3_path,
+        job_dir,
+        job_id=job_id,
+        language=language,
+    ).text

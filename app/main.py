@@ -23,7 +23,13 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.alignment import AlignmentResult, align_lyrics_to_audio, transcribe_audio_to_text
+from app.alignment import (
+    AlignmentResult,
+    TextTranscriptionResult,
+    align_lyrics_to_audio,
+    transcribe_audio_to_text,
+    transcribe_audio_with_metadata,
+)
 from app.async_jobs import (
     create_job,
     get_job,
@@ -209,7 +215,9 @@ async def _run_transcription(
     job_id: str,
     mp3_path: Path,
     job_dir: Path,
-) -> str:
+    *,
+    language: str | None = None,
+) -> TextTranscriptionResult:
     global waiting_jobs, alignment_active
     _job_log(
         job_id,
@@ -234,14 +242,16 @@ async def _run_transcription(
                     job_id,
                     "stage=transcribe_start",
                     file=mp3_path.name,
+                    language_hint=language or "auto",
                 )
-                lyrics_text = await asyncio.to_thread(
-                    transcribe_audio_to_text,
+                result = await asyncio.to_thread(
+                    transcribe_audio_with_metadata,
                     str(mp3_path),
                     str(job_dir),
                     job_id=job_id,
+                    language=language,
                 )
-                return lyrics_text
+                return result
             finally:
                 alignment_active -= 1
     except BaseException as exc:
@@ -856,9 +866,20 @@ async def lyrics_from_mp3(
 async def extract_or_transcribe_lyrics(
     request: Request,
     mp3: UploadFile = File(..., description="MP3 audio file"),
+    language: str | None = Form(
+        default=None,
+        description="Optional ISO-639-1 language code (e.g. 'fr', 'de', 'en'). Omit for per-segment multilingual auto-detection.",
+    ),
 ):
     if not mp3.filename.lower().endswith(".mp3"):
         raise HTTPException(status_code=400, detail="Please upload an .mp3 file.")
+
+    normalized_language = (language or "").strip().lower() or None
+    if normalized_language and not re.fullmatch(r"[a-z]{2,3}", normalized_language):
+        raise HTTPException(
+            status_code=400,
+            detail="language must be a valid 2- or 3-letter ISO language code (e.g. 'fr', 'de', 'en').",
+        )
 
     job_id = str(uuid.uuid4())
     job_dir = WORK_DIR / job_id
@@ -874,6 +895,7 @@ async def extract_or_transcribe_lyrics(
             endpoint="/lyrics/extract",
             client=client_ip,
             file=mp3.filename,
+            language_hint=normalized_language or "auto",
         )
 
         mp3_path = job_dir / "input.mp3"
@@ -920,8 +942,15 @@ async def extract_or_transcribe_lyrics(
             job_id,
             "stage=transcribe_fallback",
             file=mp3.filename,
+            language_hint=normalized_language or "auto",
         )
-        transcribed_text = await _run_transcription(job_id, mp3_path, job_dir)
+        transcription = await _run_transcription(
+            job_id,
+            mp3_path,
+            job_dir,
+            language=normalized_language,
+        )
+        transcribed_text = transcription.text
 
         _job_log(
             job_id,
@@ -930,11 +959,19 @@ async def extract_or_transcribe_lyrics(
             file=mp3.filename,
             elapsed=f"{time.monotonic() - request_started:.1f}s",
             source="transcription",
+            detected_language=transcription.detected_language,
         )
         return {
             "source": "transcription",
             "plain_lyrics": transcribed_text,
             "timed_lyrics_lrc": None,
+            "detected_language": transcription.detected_language,
+            "language_probability": (
+                round(transcription.language_probability, 3)
+                if transcription.language_probability is not None
+                else None
+            ),
+            "multilingual": transcription.multilingual,
             "genres": tag_result.get("genres", []),
             "style_tags": tag_result.get("style_tags", []),
             "style_prompt_raw": tag_result.get("style_prompt_raw"),
