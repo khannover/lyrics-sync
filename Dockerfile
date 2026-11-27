@@ -48,6 +48,7 @@ ARG MODEL_SIZE=small
 ENV MODEL_SIZE=${MODEL_SIZE}
 RUN python -c "from app.alignment import ensure_model; ensure_model()"
 RUN python -c "from app.genre_classifier import ensure_genre_model; ensure_genre_model()"
+RUN python -c "from app.vocal_separator import ensure_vocal_separator_model; ensure_vocal_separator_model()"
 
 EXPOSE 8000
 

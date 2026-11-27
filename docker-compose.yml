@@ -25,6 +25,7 @@ services:
       - MODEL_SIZE=small
       - WHISPER_COMPUTE_TYPE=int8
       - WHISPER_CPU_THREADS=4
+      - ENABLE_VOCAL_SEPARATION=true
       - MAX_CONCURRENT_JOBS=1
       - SYNC_RATE_LIMIT=60/hour
       - SYNC_JOBS_RATE_LIMIT=1000/hour

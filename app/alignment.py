@@ -210,7 +210,14 @@ def _convert_to_wav(mp3_path: str, job_dir: str, job_id: Optional[str] = None) -
 
 
 def _create_vocal_focus_wav(audio_path: str, job_dir: str, job_id: Optional[str] = None) -> Optional[str]:
-    """Create a vocal-emphasized wav for hard retry cases using ffmpeg only."""
+    """Create a vocal-isolated wav for hard retry cases (neural ONNX first, ffmpeg bandpass fallback)."""
+    from app.vocal_separator import separate_vocals_to_wav
+
+    neural_path = os.path.join(job_dir, "audio_vocals_sep.wav")
+    separated = separate_vocals_to_wav(audio_path, neural_path, job_id=job_id)
+    if separated:
+        return separated
+
     focused_path = os.path.join(job_dir, "audio_vocal_focus.wav")
     _job_log(job_id, "stage=vocal_focus_start", source=Path(audio_path).name)
     cmd = [
@@ -1648,7 +1655,7 @@ def align_lyrics_to_audio(
         candidates.append(candidate)
         best_candidate = max(candidates, key=_candidate_score)
         if idx == len(attempts) - 1 and not vocal_focus_added and _needs_retry(best_candidate):
-            focused_path = _create_vocal_focus_wav(wav_path, job_dir, job_id=job_id)
+            focused_path = _create_vocal_focus_wav(mp3_path, job_dir, job_id=job_id)
             if focused_path:
                 attempts.append(
                     {
@@ -1698,12 +1705,13 @@ def transcribe_audio_with_metadata(
 ) -> TextTranscriptionResult:
     """
     Transcribe audio to plain text lyrics using faster-whisper.
-    Uses `vad_filter=False` on the primary pass because Silero VAD is trained on
-    spoken dialogue and aggressively strips singing over music mixes, and enables
-    per-segment `multilingual=True` when no explicit language hint is provided so
-    songs with long instrumental intros or mixed languages are handled accurately.
+    Isolates singing vocals first using the ONNX MDX-Net vocal separator when
+    enabled (falling back to the full mix if disabled, unavailable, or sparse),
+    uses `vad_filter=False` so Silero VAD cannot strip sung vocals, and enables
+    per-segment `multilingual=True` when no explicit language hint is provided.
     """
-    wav_path = _convert_to_wav(mp3_path, job_dir, job_id)
+    from app.vocal_separator import separate_vocals_to_wav
+
     normalized_language = (language or "").strip().lower() or None
     multilingual = normalized_language is None
     model = _get_model()
@@ -1739,21 +1747,29 @@ def transcribe_audio_with_metadata(
         return lines, info
 
     started = time.monotonic()
-    text_lines, info = _run_pass(wav_path, vad_filter=False, vocal_focus=False)
-    used_vocal_focus = False
+    vocals_wav = separate_vocals_to_wav(
+        mp3_path,
+        os.path.join(job_dir, "audio_vocals_sep.wav"),
+        job_id=job_id,
+    )
 
-    # Fallback: if the primary pass produced very little text (e.g. buried vocals),
-    # retry once on vocal-focused audio and keep whichever pass yielded more words.
-    if len(text_lines) < 3:
-        focused_path = _create_vocal_focus_wav(wav_path, job_dir, job_id=job_id)
-        if focused_path:
-            _job_log(job_id, "stage=transcribe_text_retry", reason="sparse_first_pass", lines=len(text_lines))
-            retry_lines, retry_info = _run_pass(focused_path, vad_filter=False, vocal_focus=True)
+    if vocals_wav:
+        text_lines, info = _run_pass(vocals_wav, vad_filter=False, vocal_focus=True)
+        used_vocal_focus = True
+        # Fallback: if separated vocals yielded sparse text, retry on full mix WAV.
+        if len(text_lines) < 3:
+            _job_log(job_id, "stage=transcribe_text_retry", reason="sparse_vocal_sep", lines=len(text_lines))
+            wav_path = _convert_to_wav(mp3_path, job_dir, job_id)
+            retry_lines, retry_info = _run_pass(wav_path, vad_filter=False, vocal_focus=False)
             primary_words = sum(len(line.split()) for line in text_lines)
             retry_words = sum(len(line.split()) for line in retry_lines)
             if retry_words > primary_words:
                 text_lines, info = retry_lines, retry_info
-                used_vocal_focus = True
+                used_vocal_focus = False
+    else:
+        wav_path = _convert_to_wav(mp3_path, job_dir, job_id)
+        text_lines, info = _run_pass(wav_path, vad_filter=False, vocal_focus=False)
+        used_vocal_focus = False
 
     elapsed = time.monotonic() - started
     detected_language = getattr(info, "language", None)

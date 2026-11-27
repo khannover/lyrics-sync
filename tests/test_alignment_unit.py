@@ -265,10 +265,11 @@ def test_align_lines_progressive_recovers_from_unmappable_line_without_jumping_c
     assert result.lines[2][1] == 8000
 
 
-def test_transcribe_audio_with_metadata_uses_multilingual_no_vad_and_guards(monkeypatch, tmp_path):
+def test_transcribe_audio_with_metadata_uses_neural_vocal_sep_multilingual_and_guards(monkeypatch, tmp_path):
     from types import SimpleNamespace
+    import app.vocal_separator as vocal_separator
 
-    wav_path = str(tmp_path / "audio.wav")
+    sep_path = str(tmp_path / "audio_vocals_sep.wav")
     calls = []
 
     class _FakeModel:
@@ -282,15 +283,14 @@ def test_transcribe_audio_with_metadata_uses_multilingual_no_vad_and_guards(monk
             info = SimpleNamespace(language="fr", language_probability=0.87)
             return segments, info
 
-    monkeypatch.setattr(alignment, "_convert_to_wav", lambda *a, **kw: wav_path)
-    monkeypatch.setattr(alignment, "_create_vocal_focus_wav", lambda *a, **kw: None)
+    monkeypatch.setattr(vocal_separator, "separate_vocals_to_wav", lambda *a, **kw: sep_path)
     monkeypatch.setattr(alignment, "_get_model", lambda: _FakeModel())
 
     result = alignment.transcribe_audio_with_metadata("song.mp3", str(tmp_path))
 
     assert len(calls) == 1
     audio_used, kwargs = calls[0]
-    assert audio_used == wav_path
+    assert audio_used == sep_path
     assert kwargs["language"] is None
     assert kwargs["multilingual"] is True
     assert kwargs["language_detection_segments"] == 4
@@ -302,14 +302,15 @@ def test_transcribe_audio_with_metadata_uses_multilingual_no_vad_and_guards(monk
     assert result.detected_language == "fr"
     assert result.language_probability == 0.87
     assert result.multilingual is True
-    assert result.used_vocal_focus is False
+    assert result.used_vocal_focus is True
 
 
-def test_transcribe_audio_with_metadata_explicit_language_and_sparse_vocal_focus_fallback(monkeypatch, tmp_path):
+def test_transcribe_audio_with_metadata_explicit_language_and_sparse_fullmix_fallback(monkeypatch, tmp_path):
     from types import SimpleNamespace
+    import app.vocal_separator as vocal_separator
 
     wav_path = str(tmp_path / "audio.wav")
-    focused_path = str(tmp_path / "audio_vocal_focus.wav")
+    sep_path = str(tmp_path / "audio_vocals_sep.wav")
     calls = []
 
     class _FakeModel:
@@ -322,23 +323,31 @@ def test_transcribe_audio_with_metadata_explicit_language_and_sparse_vocal_focus
                 SimpleNamespace(text="Dans la nuit"),
             ], SimpleNamespace(language="fr", language_probability=0.92)
 
+    monkeypatch.setattr(vocal_separator, "separate_vocals_to_wav", lambda *a, **kw: sep_path)
     monkeypatch.setattr(alignment, "_convert_to_wav", lambda *a, **kw: wav_path)
-    monkeypatch.setattr(alignment, "_create_vocal_focus_wav", lambda *a, **kw: focused_path)
     monkeypatch.setattr(alignment, "_get_model", lambda: _FakeModel())
 
     result = alignment.transcribe_audio_with_metadata("song.mp3", str(tmp_path), language=" FR ")
 
     assert len(calls) == 2
-    assert calls[0][0] == wav_path
+    assert calls[0][0] == sep_path
     assert calls[0][1]["language"] == "fr"
     assert calls[0][1]["multilingual"] is False
     assert calls[0][1]["vad_filter"] is False
-    assert calls[1][0] == focused_path
+    assert calls[1][0] == wav_path
     assert calls[1][1]["vad_filter"] is False
     assert result.text == "Sous la lune\nDans la nuit"
     assert result.detected_language == "fr"
     assert result.multilingual is False
-    assert result.used_vocal_focus is True
+    assert result.used_vocal_focus is False
+
+
+def test_vocal_separator_respects_disable_env_flag(monkeypatch, tmp_path):
+    import app.vocal_separator as vocal_separator
+
+    monkeypatch.setenv("ENABLE_VOCAL_SEPARATION", "false")
+    assert vocal_separator.is_vocal_separation_enabled() is False
+    assert vocal_separator.separate_vocals_to_wav("song.mp3", str(tmp_path / "v.wav")) is None
 
 
 
