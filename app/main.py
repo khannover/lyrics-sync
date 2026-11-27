@@ -16,6 +16,7 @@ from urllib.parse import quote, urlparse
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
+from mutagen import MutagenError
 from mutagen.mp3 import MP3, HeaderNotFoundError
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -347,8 +348,12 @@ def _ensure_taggable_mp3(input_path: Path, job_dir: Path) -> Path:
     try:
         MP3(str(input_path))
         return input_path
-    except HeaderNotFoundError:
-        logger.warning("Input is not a taggable MP3 stream, transcoding via ffmpeg: %s", input_path.name)
+    except (HeaderNotFoundError, MutagenError) as exc:
+        logger.warning(
+            "Input is not a directly taggable MP3 (%s), normalizing via ffmpeg: %s",
+            exc,
+            input_path.name,
+        )
 
     normalized_path = job_dir / "input_normalized.mp3"
     cmd = [

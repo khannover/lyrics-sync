@@ -806,4 +806,17 @@ def test_lyrics_extract_returns_multilingual_metadata_and_forwards_language_hint
         assert resp_bad.status_code == 400
 
     assert seen_languages == [None, "fr"]
+
+
+def test_ensure_taggable_mp3_normalizes_unsupported_id3v20_header(tmp_path):
+    from tests.test_sylt_writer import _SILENT_MP3_BYTES
+
+    # Prepend a synthetic ID3v2.0 header (version 2.0, flags 0, size 0) to valid MPEG frames.
+    # mutagen raises ID3UnsupportedVersionError on ID3v2.0; _ensure_taggable_mp3 must normalize via ffmpeg.
+    bad_mp3 = tmp_path / "bad_id3v20.mp3"
+    bad_mp3.write_bytes(b"ID3\x00\x00\x00\x00\x00\x00\x00" + _SILENT_MP3_BYTES)
+
+    normalized = main._ensure_taggable_mp3(bad_mp3, tmp_path)
+    assert normalized.exists()
+    assert normalized.name == "input_normalized.mp3"
 
