@@ -44,14 +44,19 @@ services:
       dockerfile: tarpit/Dockerfile
     expose:
       - "8080"
+    volumes:
+      - tarpit-data:/data
     environment:
       - TARPIT_DELAY_SECONDS=20
       - TARPIT_STATUS_CODE=404
+      - TARPIT_LOG_PATH=/data/tarpit-events.jsonl
+      - LYRIC_SYNC_CALLBACK_SECRET=${LYRIC_SYNC_CALLBACK_SECRET:-}
     restart: unless-stopped
 
 volumes:
   model-cache:
   lyric-sync-work:
+  tarpit-data:
 
 networks:
   default:
