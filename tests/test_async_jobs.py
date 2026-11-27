@@ -485,3 +485,98 @@ async def test_deliver_callback_uses_env_override_url(tmp_path, monkeypatch):
     assert ok is True
     assert posted_urls == ["https://www.freemusiers.fm/api/internal/lyrics-sync/callback"]
     assert job.callback_status == aj.CALLBACK_DELIVERED
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_override_preserves_public_callback_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(aj, "WORK_DIR", tmp_path / "work")
+    monkeypatch.setenv(
+        "LYRIC_SYNC_CALLBACK_URL_OVERRIDE",
+        "https://www.freemusiers.fm/api/internal/lyrics-sync/callback",
+    )
+    aj.WORK_DIR.mkdir(parents=True, exist_ok=True)
+
+    posted_urls = []
+
+    class _MockResponse:
+        status_code = 200
+        text = "ok"
+
+    class _MockAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            posted_urls.append(url)
+            return _MockResponse()
+
+    monkeypatch.setattr(aj.httpx, "AsyncClient", _MockAsyncClient)
+
+    mp3_path, lyrics_path = _write_inputs(tmp_path)
+    job = aj.create_job(
+        track_id="public-url-track",
+        callback_url="https://other-service.example.com/api/callback",
+        manual=False,
+        mp3_path=mp3_path,
+        lyrics_path=lyrics_path,
+    )
+    job.status = "completed"
+    job.lyrics_lrc = "[00:01.00]public line"
+    job.quality = "good"
+
+    ok = await aj._deliver_callback(job)
+    assert ok is True
+    assert posted_urls == ["https://other-service.example.com/api/callback"]
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_does_not_retry_permanent_4xx(tmp_path, monkeypatch):
+    monkeypatch.setattr(aj, "WORK_DIR", tmp_path / "work")
+    monkeypatch.setattr(aj, "CALLBACK_RETRIES", 5)
+    aj.WORK_DIR.mkdir(parents=True, exist_ok=True)
+
+    attempts = []
+
+    class _MockResponse:
+        status_code = 400
+        text = '{"detail":"Track not found"}'
+
+    class _MockAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            attempts.append(url)
+            return _MockResponse()
+
+    monkeypatch.setattr(aj.httpx, "AsyncClient", _MockAsyncClient)
+
+    mp3_path, lyrics_path = _write_inputs(tmp_path)
+    job = aj.create_job(
+        track_id="missing-track",
+        callback_url="https://www.freemusiers.fm/api/internal/lyrics-sync/callback",
+        manual=False,
+        mp3_path=mp3_path,
+        lyrics_path=lyrics_path,
+    )
+    job.status = "completed"
+    job.lyrics_lrc = "[00:01.00]gone"
+    job.quality = "good"
+
+    ok = await aj._deliver_callback(job)
+    assert ok is True
+    assert len(attempts) == 1
+    assert job.callback_status == aj.CALLBACK_DELIVERED
+    assert "Track not found" in (job.callback_last_error or "")

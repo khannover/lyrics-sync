@@ -28,6 +28,7 @@ from app.alignment import (
     AlignmentResult,
     TextTranscriptionResult,
     align_lyrics_to_audio,
+    is_placeholder_lyrics,
     transcribe_audio_to_text,
     transcribe_audio_with_metadata,
 )
@@ -919,7 +920,17 @@ async def extract_or_transcribe_lyrics(
         )
         tag_result = await asyncio.to_thread(extract_lyrics_from_mp3, str(mp3_path))
         
-        has_embedded = tag_result.get("plain_lyrics") or tag_result.get("timed_lyrics_lrc")
+        embedded_plain = tag_result.get("plain_lyrics")
+        embedded_lrc = tag_result.get("timed_lyrics_lrc")
+        embedded_is_placeholder = is_placeholder_lyrics(embedded_plain) and not embedded_lrc
+        if embedded_is_placeholder and embedded_plain:
+            _job_log(
+                job_id,
+                "stage=ignore_placeholder_embedded",
+                file=mp3.filename,
+                embedded_preview=embedded_plain.strip()[:40],
+            )
+        has_embedded = bool((embedded_plain and not embedded_is_placeholder) or embedded_lrc)
         if has_embedded:
             _job_log(
                 job_id,

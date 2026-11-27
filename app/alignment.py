@@ -21,7 +21,47 @@ import numpy as np
 from dtw import dtw
 from scipy.spatial.distance import cdist
 
+from app.content_filter import evaluate_content_rating
+
 logger = logging.getLogger(__name__)
+
+_PLACEHOLDER_LYRICS_NORMALIZED = frozenset(
+    {
+        "",
+        "instrumental",
+        "instrumental track",
+        "instrumental only",
+        "instrumental version",
+        "no lyrics",
+        "none",
+        "na",
+        "n a",
+        "tbd",
+        "unknown",
+        "music",
+        "musique",
+    }
+)
+
+
+def is_placeholder_lyrics(lyrics_text: Optional[str]) -> bool:
+    """Return True if *lyrics_text* is empty or only a non-lyric placeholder (e.g. 'instrumental')."""
+    if not lyrics_text or not lyrics_text.strip():
+        return True
+    cleaned_lines = []
+    for raw_line in lyrics_text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        # Unwrap bracketed placeholders like [Instrumental] or (No lyrics) before normalizing.
+        unwrapped = stripped.strip("[]()").strip()
+        norm = _normalize(unwrapped)
+        if norm:
+            cleaned_lines.append(norm)
+    if not cleaned_lines:
+        return True
+    combined = " ".join(cleaned_lines)
+    return combined in _PLACEHOLDER_LYRICS_NORMALIZED
 
 
 def _job_log(job_id: Optional[str], event: str, **fields) -> None:
@@ -1536,6 +1576,25 @@ def _build_candidate_result(
     matched_words = sum(1 for timing in structured.word_timings if timing.matched)
     word_match_ratio = matched_words / max(1, total_words)
 
+    audio_transcript = " ".join(
+        str(w.get("word") or "").strip()
+        for w in whisper_words
+        if str(w.get("word") or "").strip()
+    )
+    audio_content_rating = evaluate_content_rating(audio_transcript)
+    placeholder_supplied = is_placeholder_lyrics("\n".join(lyrics_lines))
+    lyrics_mismatch = bool(
+        len(whisper_words) >= 15 and (word_match_ratio < 0.15 or placeholder_supplied)
+    )
+
+    if total_words > 0 and matched_words == 0 and whisper_words:
+        quality = "fallback"
+        warnings.append("No supplied lyric words matched the audio transcription.")
+    if lyrics_mismatch:
+        if quality == "good":
+            quality = "fallback"
+        warnings.append("Supplied lyrics do not match detected sung audio.")
+
     report = {
         "quality": quality,
         "warnings": warnings,
@@ -1545,6 +1604,8 @@ def _build_candidate_result(
         "coverage_ratio": round(coverage_ratio, 3),
         "unique_ratio": round(unique_ratio, 3),
         "word_match_ratio": round(word_match_ratio, 3),
+        "lyrics_mismatch": lyrics_mismatch,
+        "audio_content_rating": audio_content_rating,
         "language": detected_language,
         "language_probability": round(language_probability, 3) if language_probability is not None else None,
         "transcription_pass": transcription_pass,

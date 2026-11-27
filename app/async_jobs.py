@@ -13,6 +13,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -358,11 +359,24 @@ def _finish_job(job: SyncJob) -> None:
     _unregister_job(job.job_id)
 
 
+def _is_internal_callback_host(url: str) -> bool:
+    """Return True if *url* is empty or targets an internal/local host (e.g. 'backend', 'localhost')."""
+    if not url:
+        return True
+    host = (urlparse(url).hostname or "").strip().lower()
+    if not host:
+        return True
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    return "." not in host
+
+
 def _resolve_callback_url(job_callback_url: str) -> str:
+    raw = (job_callback_url or "").strip()
     override = os.environ.get("LYRIC_SYNC_CALLBACK_URL_OVERRIDE", "").strip()
-    if override:
+    if override and _is_internal_callback_host(raw):
         return override
-    return (job_callback_url or "").strip()
+    return raw
 
 
 async def _deliver_callback(job: SyncJob) -> bool:
@@ -413,6 +427,20 @@ async def _deliver_callback(job: SyncJob) -> bool:
                     _save_job(job)
                     return True
                 last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                if 400 <= response.status_code < 500 and response.status_code not in (408, 429):
+                    logger.warning(
+                        "[async] job=%s callback_rejected_permanent track=%s status=%s url=%s error=%s",
+                        job.job_id,
+                        job.track_id,
+                        response.status_code,
+                        target_url,
+                        last_error,
+                    )
+                    job.callback_status = CALLBACK_DELIVERED
+                    job.delivered_at = job.delivered_at or time.time()
+                    job.callback_last_error = last_error
+                    _save_job(job)
+                    return True
         except httpx.HTTPError as exc:
             last_error = str(exc)
 

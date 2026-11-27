@@ -350,4 +350,38 @@ def test_vocal_separator_respects_disable_env_flag(monkeypatch, tmp_path):
     assert vocal_separator.separate_vocals_to_wav("song.mp3", str(tmp_path / "v.wav")) is None
 
 
+def test_is_placeholder_lyrics_detects_instrumental_and_keeps_real_lyrics():
+    assert alignment.is_placeholder_lyrics("instrumental") is True
+    assert alignment.is_placeholder_lyrics("  [Instrumental]  ") is True
+    assert alignment.is_placeholder_lyrics("(No lyrics)") is True
+    assert alignment.is_placeholder_lyrics("N/A") is True
+    assert alignment.is_placeholder_lyrics("Walking down the midnight street") is False
+
+
+def test_build_candidate_result_flags_lyrics_mismatch_and_audio_nsfw_on_fake_instrumental():
+    # User wrote "instrumental" to bypass text NSFW filter, but audio has explicit sung lyrics.
+    sung_words = [
+        "yeah", "every", "single", "night", "we", "scream", "fuck", "this",
+        "city", "burn", "it", "down", "motherfucker", "feel", "the", "bass",
+    ]
+    whisper_words = [
+        {"word": w, "start": i * 0.5, "end": i * 0.5 + 0.4}
+        for i, w in enumerate(sung_words)
+    ]
+
+    result = alignment._build_candidate_result(
+        ["instrumental"],
+        whisper_words,
+        duration_ms=30_000,
+        detected_language="en",
+        language_probability=0.95,
+        transcription_pass="fast",
+    )
+
+    assert result.quality == "fallback"
+    assert result.report["lyrics_mismatch"] is True
+    assert result.report["audio_content_rating"]["rating"] == "explicit"
+    assert "profanity" in result.report["audio_content_rating"]["categories"]
+
+
 

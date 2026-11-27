@@ -819,4 +819,48 @@ def test_ensure_taggable_mp3_normalizes_unsupported_id3v20_header(tmp_path):
     normalized = main._ensure_taggable_mp3(bad_mp3, tmp_path)
     assert normalized.exists()
     assert normalized.name == "input_normalized.mp3"
+
+
+def test_lyrics_extract_ignores_placeholder_embedded_tag_and_transcribes_audio(monkeypatch, tmp_path):
+    from tests.test_sylt_writer import _SILENT_MP3_BYTES
+    from app.alignment import TextTranscriptionResult
+
+    work = tmp_path / "extract-placeholder-work"
+    work.mkdir()
+    monkeypatch.setattr(main, "WORK_DIR", work)
+    monkeypatch.setattr(
+        main,
+        "extract_lyrics_from_mp3",
+        lambda _path: {
+            "plain_lyrics": "Instrumental",
+            "timed_lyrics_lrc": None,
+            "genres": [],
+            "style_tags": [],
+            "style_prompt_raw": None,
+            "bpm": None,
+            "notes": None,
+        },
+    )
+
+    async def _fake_transcription(job_id, mp3_path, job_dir, *, language=None):
+        return TextTranscriptionResult(
+            text="Fuck this fake instrumental tag",
+            detected_language="en",
+            language_probability=0.95,
+            multilingual=True,
+            used_vocal_focus=True,
+        )
+
+    monkeypatch.setattr(main, "_run_transcription", _fake_transcription)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/lyrics/extract",
+            files={"mp3": ("sneaky.mp3", _SILENT_MP3_BYTES, "audio/mpeg")},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "transcription"
+    assert body["plain_lyrics"] == "Fuck this fake instrumental tag"
+    assert body["content_rating"]["rating"] == "explicit"
 
