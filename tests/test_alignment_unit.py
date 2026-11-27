@@ -455,4 +455,21 @@ def test_transcribe_audio_discards_single_word_phantom_hallucination(monkeypatch
     assert result.detected_language is None
 
 
+def test_filter_whisper_phantom_lines_strips_castingwords_and_thank_you_loops():
+    # Observed real-world instrumental bleed hallucinations across 30s windows:
+    assert alignment._filter_whisper_phantom_lines(
+        ["Transcription by CastingWords", "Thank you.", "Thank you.", "Thank you."]
+    ) == []
+    assert alignment._filter_whisper_phantom_lines(
+        ["Thank you.", "Thank you.", "Amém.", "Thank you.", "Thank you."]
+    ) == ["Amém."]
+    # Repeated short non-lyric loop across windows:
+    assert alignment._filter_whisper_phantom_lines(
+        ["Amém.", "Amém.", "Amém.", "Amém."]
+    ) == []
+    # Real lyrics must stay intact:
+    real = ["Oh, oh, oh", "Fuck all the haters", "The hypocrites and liars"]
+    assert alignment._filter_whisper_phantom_lines(real) == real
+
+
 

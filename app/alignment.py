@@ -44,6 +44,45 @@ _PLACEHOLDER_LYRICS_NORMALIZED = frozenset(
 )
 
 
+_WHISPER_PHANTOM_LINE_RE = re.compile(
+    r"^(?:"
+    r"thank\s+you(?:\s+very\s+much)?|"
+    r"thanks(?:\s+a\s+lot)?|"
+    r"thank(?:s|\s+you)\s+for\s+(?:watching|listening|viewing).*|"
+    r"(?:please\s+)?(?:like|subscribe|don'?t\s+forget\s+to\s+like).*|"
+    r"we'?ll\s+see\s+you\s+in\s+the\s+next\s+video.*|"
+    r"this\s+is\s+the\s+end\s+of\s+this\s+video.*|"
+    r"transcription\s+by\s+.*|"
+    r"subtitles?\s+by\s+.*|"
+    r"captioned\s+by\s+.*|"
+    r".*amara\.org.*|"
+    r"you|bye(?:-?bye)?|"
+    r"music|musique|générique|untertitel.*|"
+    r"vielen\s+dank\s+für'?s\s+zuschauen.*"
+    r")[\s.!?…]*$",
+    re.IGNORECASE,
+)
+
+
+def _filter_whisper_phantom_lines(lines: List[str]) -> List[str]:
+    """
+    Strip classic Whisper subtitle/outro hallucinations (e.g. 'Thank you.',
+    'Transcription by CastingWords', 'Thanks for watching') and collapse
+    cross-window repetition loops produced when contiguous 30s windows run on
+    quiet instrumental bleed.
+    """
+    cleaned = [line for line in lines if not _WHISPER_PHANTOM_LINE_RE.match(line.strip())]
+    if not cleaned:
+        return []
+    # Cross-window silence-loop guard: e.g. 6 windows all emitting the same 1-2 short tokens.
+    if len(cleaned) >= 4:
+        norms = [_normalize(line) for line in cleaned]
+        non_empty = [n for n in norms if n]
+        if non_empty and len(set(non_empty)) <= 2 and max(len(n.split()) for n in non_empty) <= 3:
+            return []
+    return cleaned
+
+
 def is_placeholder_lyrics(lyrics_text: Optional[str]) -> bool:
     """Return True if *lyrics_text* is empty or only a non-lyric placeholder (e.g. 'instrumental')."""
     if not lyrics_text or not lyrics_text.strip():
@@ -1876,6 +1915,16 @@ def transcribe_audio_with_metadata(
         wav_path = _convert_to_wav(mp3_path, job_dir, job_id)
         text_lines, info = _run_pass(wav_path, vad_filter=False, vocal_focus=False)
         used_vocal_focus = False
+
+    raw_line_count = len(text_lines)
+    text_lines = _filter_whisper_phantom_lines(text_lines)
+    if raw_line_count != len(text_lines):
+        _job_log(
+            job_id,
+            "stage=transcribe_text_phantom_filtered",
+            removed=raw_line_count - len(text_lines),
+            kept=len(text_lines),
+        )
 
     final_text = "\n".join(text_lines).strip()
     total_tokens = len(_tokenize(final_text))
