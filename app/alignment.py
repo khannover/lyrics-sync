@@ -1771,7 +1771,7 @@ def transcribe_audio_with_metadata(
     uses `vad_filter=False` so Silero VAD cannot strip sung vocals, and enables
     per-segment `multilingual=True` when no explicit language hint is provided.
     """
-    from app.vocal_separator import separate_vocals_to_wav
+    from app.vocal_separator import assess_vocal_presence, separate_vocals_to_wav
 
     normalized_language = (language or "").strip().lower() or None
     multilingual = normalized_language is None
@@ -1801,10 +1801,31 @@ def transcribe_audio_with_metadata(
             no_repeat_ngram_size=3,
         )
         lines: List[str] = []
+        skipped_low_conf = 0
         for segment in segments:
             line = segment.text.strip()
-            if line:
-                lines.append(line)
+            if not line:
+                continue
+            no_speech = getattr(segment, "no_speech_prob", None)
+            avg_logprob = getattr(segment, "avg_logprob", None)
+            comp_ratio = getattr(segment, "compression_ratio", None)
+            if no_speech is not None and float(no_speech) >= 0.70:
+                skipped_low_conf += 1
+                continue
+            if avg_logprob is not None and float(avg_logprob) < -1.25:
+                skipped_low_conf += 1
+                continue
+            if comp_ratio is not None and float(comp_ratio) > 2.4:
+                skipped_low_conf += 1
+                continue
+            lines.append(line)
+        if skipped_low_conf:
+            _job_log(
+                job_id,
+                "stage=transcribe_text_filtered",
+                skipped_low_conf=skipped_low_conf,
+                kept=len(lines),
+            )
         return lines, info
 
     started = time.monotonic()
@@ -1815,9 +1836,27 @@ def transcribe_audio_with_metadata(
     )
 
     if vocals_wav:
+        has_vocals, p95_rms, active_ratio = assess_vocal_presence(vocals_wav)
+        if not has_vocals:
+            elapsed = time.monotonic() - started
+            _job_log(
+                job_id,
+                "stage=transcribe_text_instrumental",
+                p95_rms=f"{p95_rms:.5f}",
+                active_ratio=f"{active_ratio:.3f}",
+                elapsed=f"{elapsed:.1f}s",
+            )
+            return TextTranscriptionResult(
+                text="",
+                detected_language=None,
+                language_probability=None,
+                multilingual=multilingual,
+                used_vocal_focus=True,
+            )
+
         text_lines, info = _run_pass(vocals_wav, vad_filter=False, vocal_focus=True)
         used_vocal_focus = True
-        # Fallback: if separated vocals yielded sparse text, retry on full mix WAV.
+        # Fallback: if separated vocals had energy yet yielded sparse text, retry on full mix WAV.
         if len(text_lines) < 3:
             _job_log(job_id, "stage=transcribe_text_retry", reason="sparse_vocal_sep", lines=len(text_lines))
             wav_path = _convert_to_wav(mp3_path, job_dir, job_id)

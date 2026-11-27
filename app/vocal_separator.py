@@ -42,6 +42,40 @@ CHUNK_SIZE = HOP_LENGTH * (DIM_T - 1)  # 261,120 samples (~5.92s at 44.1 kHz)
 TRIM = N_FFT // 2  # 3,072 samples trimmed per edge to eliminate STFT boundary artifacts
 GEN_SIZE = CHUNK_SIZE - 2 * TRIM  # 254,976 samples (~5.78s clean audio per chunk)
 
+# Thresholds for detecting pure-instrumental tracks after vocal separation.
+# On true instrumentals, isolated vocals sit near -65 dBFS (p95_rms ~0.0005, active_ratio ~0.0).
+# Even quiet whispered/soft singing exceeds p95_rms >= 0.01 and active_ratio >= 0.01.
+INSTRUMENTAL_P95_RMS_THRESHOLD = float(os.environ.get("INSTRUMENTAL_P95_RMS_THRESHOLD", "0.008"))
+INSTRUMENTAL_FRAME_RMS_THRESHOLD = float(os.environ.get("INSTRUMENTAL_FRAME_RMS_THRESHOLD", "0.01"))
+INSTRUMENTAL_ACTIVE_RATIO_THRESHOLD = float(os.environ.get("INSTRUMENTAL_ACTIVE_RATIO_THRESHOLD", "0.01"))
+
+
+def assess_vocal_presence(wav_path: str) -> tuple[bool, float, float]:
+    """
+    Inspect a 16 kHz isolated vocal WAV and return (has_vocals, p95_rms, active_ratio).
+
+    A track is treated as pure instrumental only when BOTH its 95th-percentile
+    100ms frame RMS and active-frame ratio fall below conservative thresholds.
+    """
+    data, sr = sf.read(wav_path, dtype="float32")
+    if data.ndim > 1:
+        data = np.mean(data, axis=1, dtype=np.float32)
+    frame_len = max(1, int(sr * 0.1))
+    n_frames = len(data) // frame_len
+    if n_frames == 0:
+        rms = float(np.sqrt(np.mean(data**2))) if len(data) else 0.0
+        return (rms >= INSTRUMENTAL_P95_RMS_THRESHOLD, rms, 1.0 if rms >= INSTRUMENTAL_FRAME_RMS_THRESHOLD else 0.0)
+    frames = data[: n_frames * frame_len].reshape(n_frames, frame_len)
+    frame_rms = np.sqrt(np.mean(frames**2, axis=1))
+    p95_rms = float(np.percentile(frame_rms, 95))
+    active_ratio = float(np.mean(frame_rms >= INSTRUMENTAL_FRAME_RMS_THRESHOLD))
+    has_vocals = not (
+        p95_rms < INSTRUMENTAL_P95_RMS_THRESHOLD
+        and active_ratio < INSTRUMENTAL_ACTIVE_RATIO_THRESHOLD
+    )
+    return has_vocals, p95_rms, active_ratio
+
+
 _session = None
 _input_name: Optional[str] = None
 

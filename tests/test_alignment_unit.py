@@ -284,6 +284,7 @@ def test_transcribe_audio_with_metadata_uses_neural_vocal_sep_multilingual_and_g
             return segments, info
 
     monkeypatch.setattr(vocal_separator, "separate_vocals_to_wav", lambda *a, **kw: sep_path)
+    monkeypatch.setattr(vocal_separator, "assess_vocal_presence", lambda _p: (True, 0.12, 0.45))
     monkeypatch.setattr(alignment, "_get_model", lambda: _FakeModel())
 
     result = alignment.transcribe_audio_with_metadata("song.mp3", str(tmp_path))
@@ -324,6 +325,7 @@ def test_transcribe_audio_with_metadata_explicit_language_and_sparse_fullmix_fal
             ], SimpleNamespace(language="fr", language_probability=0.92)
 
     monkeypatch.setattr(vocal_separator, "separate_vocals_to_wav", lambda *a, **kw: sep_path)
+    monkeypatch.setattr(vocal_separator, "assess_vocal_presence", lambda _p: (True, 0.08, 0.30))
     monkeypatch.setattr(alignment, "_convert_to_wav", lambda *a, **kw: wav_path)
     monkeypatch.setattr(alignment, "_get_model", lambda: _FakeModel())
 
@@ -382,6 +384,52 @@ def test_build_candidate_result_flags_lyrics_mismatch_and_audio_nsfw_on_fake_ins
     assert result.report["lyrics_mismatch"] is True
     assert result.report["audio_content_rating"]["rating"] == "explicit"
     assert "profanity" in result.report["audio_content_rating"]["categories"]
+
+
+def test_transcribe_audio_skips_whisper_on_silent_instrumental_vocals(monkeypatch, tmp_path):
+    import app.vocal_separator as vocal_separator
+
+    sep_path = str(tmp_path / "audio_vocals_sep.wav")
+    whisper_called = False
+
+    class _FailIfCalledModel:
+        def transcribe(self, *args, **kwargs):
+            nonlocal whisper_called
+            whisper_called = True
+            return [], None
+
+    monkeypatch.setattr(vocal_separator, "separate_vocals_to_wav", lambda *a, **kw: sep_path)
+    monkeypatch.setattr(vocal_separator, "assess_vocal_presence", lambda _p: (False, 0.00045, 0.0))
+    monkeypatch.setattr(alignment, "_get_model", lambda: _FailIfCalledModel())
+
+    result = alignment.transcribe_audio_with_metadata("starlight_instrumental.mp3", str(tmp_path))
+    assert result.text == ""
+    assert result.detected_language is None
+    assert whisper_called is False
+
+
+def test_transcribe_audio_filters_high_no_speech_prob_hallucinations(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    import app.vocal_separator as vocal_separator
+
+    sep_path = str(tmp_path / "audio_vocals_sep.wav")
+    wav_path = str(tmp_path / "audio.wav")
+
+    class _HallucinatingModel:
+        def transcribe(self, *args, **kwargs):
+            segments = [
+                SimpleNamespace(text="ლნალ", no_speech_prob=0.85, avg_logprob=-0.99, compression_ratio=0.57),
+                SimpleNamespace(text="ყპ", no_speech_prob=0.84, avg_logprob=-1.40, compression_ratio=0.50),
+            ]
+            return segments, SimpleNamespace(language="ka", language_probability=0.55)
+
+    monkeypatch.setattr(vocal_separator, "separate_vocals_to_wav", lambda *a, **kw: sep_path)
+    monkeypatch.setattr(vocal_separator, "assess_vocal_presence", lambda _p: (True, 0.02, 0.05))
+    monkeypatch.setattr(alignment, "_convert_to_wav", lambda *a, **kw: wav_path)
+    monkeypatch.setattr(alignment, "_get_model", lambda: _HallucinatingModel())
+
+    result = alignment.transcribe_audio_with_metadata("noisy.mp3", str(tmp_path))
+    assert result.text == ""
 
 
 
