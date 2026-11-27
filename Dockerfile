@@ -44,7 +44,7 @@ RUN mkdir -p /app/models
 COPY models/ /app/models/
 
 # Pre-download models at build time
-ARG MODEL_SIZE=small
+ARG MODEL_SIZE=large-v3-turbo
 ENV MODEL_SIZE=${MODEL_SIZE}
 RUN python -c "from app.alignment import ensure_model; ensure_model()"
 RUN python -c "from app.genre_classifier import ensure_genre_model; ensure_genre_model()"

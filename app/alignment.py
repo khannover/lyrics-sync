@@ -163,10 +163,11 @@ def _get_model():
     global _model
     if _model is None:
         from faster_whisper import WhisperModel
+        from faster_whisper.utils import _MODELS as FW_MODELS
         from huggingface_hub import model_info
 
-        repo_id = f"Systran/faster-whisper-{MODEL_SIZE}"
-        logger.info("Loading whisper model '%s' ...", MODEL_SIZE)
+        repo_id = FW_MODELS.get(MODEL_SIZE, f"Systran/faster-whisper-{MODEL_SIZE}")
+        logger.info("Loading whisper model '%s' (%s) ...", MODEL_SIZE, repo_id)
 
         try:
             _model = WhisperModel(
@@ -1778,6 +1779,8 @@ def transcribe_audio_with_metadata(
     model = _get_model()
 
     def _run_pass(target_audio: str, *, vad_filter: bool, vocal_focus: bool) -> Tuple[List[str], Any]:
+        duration_ms = _get_audio_duration_ms(target_audio) if not vad_filter else 0
+        clip_timestamps = _build_contiguous_clip_timestamps(duration_ms) if not vad_filter else None
         _job_log(
             job_id,
             "stage=transcribe_text_start",
@@ -1785,21 +1788,24 @@ def transcribe_audio_with_metadata(
             vocal_focus=vocal_focus,
             language_hint=normalized_language or "auto",
             multilingual=multilingual,
+            windows=(len(clip_timestamps) // 2) if clip_timestamps else "auto",
         )
-        segments, info = model.transcribe(
-            target_audio,
-            beam_size=5,
-            word_timestamps=False,
-            vad_filter=vad_filter,
-            language=normalized_language,
-            multilingual=multilingual,
-            language_detection_segments=4,
-            language_detection_threshold=0.6,
-            condition_on_previous_text=False,
-            temperature=0.0,
-            repetition_penalty=1.2,
-            no_repeat_ngram_size=3,
-        )
+        transcribe_kwargs: Dict[str, Any] = {
+            "beam_size": 5,
+            "word_timestamps": False,
+            "vad_filter": vad_filter,
+            "language": normalized_language,
+            "multilingual": multilingual,
+            "language_detection_segments": 4,
+            "language_detection_threshold": 0.6,
+            "condition_on_previous_text": False,
+            "temperature": 0.0,
+            "repetition_penalty": 1.2,
+            "no_repeat_ngram_size": 3,
+        }
+        if clip_timestamps is not None:
+            transcribe_kwargs["clip_timestamps"] = clip_timestamps
+        segments, info = model.transcribe(target_audio, **transcribe_kwargs)
         lines: List[str] = []
         skipped_low_conf = 0
         for segment in segments:
@@ -1871,6 +1877,17 @@ def transcribe_audio_with_metadata(
         text_lines, info = _run_pass(wav_path, vad_filter=False, vocal_focus=False)
         used_vocal_focus = False
 
+    final_text = "\n".join(text_lines).strip()
+    total_tokens = len(_tokenize(final_text))
+    if final_text and total_tokens < 4:
+        _job_log(
+            job_id,
+            "stage=transcribe_text_discarded_too_short",
+            tokens=total_tokens,
+            preview=final_text[:40],
+        )
+        final_text = ""
+
     elapsed = time.monotonic() - started
     detected_language = getattr(info, "language", None)
     raw_prob = getattr(info, "language_probability", None)
@@ -1882,13 +1899,13 @@ def transcribe_audio_with_metadata(
         language_prob=f"{language_probability:.2f}" if language_probability is not None else "n/a",
         multilingual=multilingual,
         vocal_focus=used_vocal_focus,
-        lines=len(text_lines),
+        lines=len(text_lines) if final_text else 0,
         elapsed=f"{elapsed:.1f}s",
     )
     return TextTranscriptionResult(
-        text="\n".join(text_lines).strip(),
-        detected_language=detected_language,
-        language_probability=language_probability,
+        text=final_text,
+        detected_language=detected_language if final_text else None,
+        language_probability=language_probability if final_text else None,
         multilingual=multilingual,
         used_vocal_focus=used_vocal_focus,
     )

@@ -21,7 +21,7 @@ services:
     build:
       context: .
       args:
-        MODEL_SIZE: small
+        MODEL_SIZE: ${MODEL_SIZE:-large-v3-turbo}
     expose:
       - "8000"
     volumes:
@@ -29,7 +29,7 @@ services:
       - model-cache:/app/models
       - lyric-sync-work:/tmp/lyric-sync
     environment:
-      - MODEL_SIZE=small
+      - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
       - WHISPER_COMPUTE_TYPE=int8
       - WHISPER_CPU_THREADS=4
       - ENABLE_VOCAL_SEPARATION=true

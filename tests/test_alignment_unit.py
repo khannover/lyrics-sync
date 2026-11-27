@@ -285,6 +285,7 @@ def test_transcribe_audio_with_metadata_uses_neural_vocal_sep_multilingual_and_g
 
     monkeypatch.setattr(vocal_separator, "separate_vocals_to_wav", lambda *a, **kw: sep_path)
     monkeypatch.setattr(vocal_separator, "assess_vocal_presence", lambda _p: (True, 0.12, 0.45))
+    monkeypatch.setattr(alignment, "_get_audio_duration_ms", lambda _p: 90_000)
     monkeypatch.setattr(alignment, "_get_model", lambda: _FakeModel())
 
     result = alignment.transcribe_audio_with_metadata("song.mp3", str(tmp_path))
@@ -299,6 +300,7 @@ def test_transcribe_audio_with_metadata_uses_neural_vocal_sep_multilingual_and_g
     assert kwargs["repetition_penalty"] == 1.2
     assert kwargs["no_repeat_ngram_size"] == 3
     assert kwargs["vad_filter"] is False
+    assert kwargs["clip_timestamps"] == [0.0, 30.0, 30.0, 60.0, 60.0, 90.0]
     assert result.text == "Je marche dans la nuit\nChaque sourire et sabotage\nHold me closer now"
     assert result.detected_language == "fr"
     assert result.language_probability == 0.87
@@ -430,6 +432,27 @@ def test_transcribe_audio_filters_high_no_speech_prob_hallucinations(monkeypatch
 
     result = alignment.transcribe_audio_with_metadata("noisy.mp3", str(tmp_path))
     assert result.text == ""
+
+
+def test_transcribe_audio_discards_single_word_phantom_hallucination(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    import app.vocal_separator as vocal_separator
+
+    sep_path = str(tmp_path / "audio_vocals_sep.wav")
+    wav_path = str(tmp_path / "audio.wav")
+
+    class _SingleWordModel:
+        def transcribe(self, *args, **kwargs):
+            return [SimpleNamespace(text="you", no_speech_prob=0.3, avg_logprob=-0.5, compression_ratio=1.0)], SimpleNamespace(language="en", language_probability=0.9)
+
+    monkeypatch.setattr(vocal_separator, "separate_vocals_to_wav", lambda *a, **kw: sep_path)
+    monkeypatch.setattr(vocal_separator, "assess_vocal_presence", lambda _p: (True, 0.02, 0.05))
+    monkeypatch.setattr(alignment, "_convert_to_wav", lambda *a, **kw: wav_path)
+    monkeypatch.setattr(alignment, "_get_model", lambda: _SingleWordModel())
+
+    result = alignment.transcribe_audio_with_metadata("upbeat_bg.mp3", str(tmp_path))
+    assert result.text == ""
+    assert result.detected_language is None
 
 
 
