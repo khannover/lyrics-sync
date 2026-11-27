@@ -436,3 +436,52 @@ def test_ack_job_persists_state_across_restart(tmp_path, monkeypatch):
     assert reloaded is not None
     assert reloaded["callback_status"] == aj.CALLBACK_ACKED
     assert reloaded["lyrics_lrc"] == "[00:02.00]acked line"
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_uses_env_override_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(aj, "WORK_DIR", tmp_path / "work")
+    monkeypatch.setenv(
+        "LYRIC_SYNC_CALLBACK_URL_OVERRIDE",
+        "https://www.freemusiers.fm/api/internal/lyrics-sync/callback",
+    )
+    aj.WORK_DIR.mkdir(parents=True, exist_ok=True)
+
+    posted_urls = []
+
+    class _MockResponse:
+        status_code = 200
+        text = "ok"
+
+    class _MockAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            posted_urls.append(url)
+            return _MockResponse()
+
+    monkeypatch.setattr(aj.httpx, "AsyncClient", _MockAsyncClient)
+
+    mp3_path, lyrics_path = _write_inputs(tmp_path)
+    job = aj.create_job(
+        track_id="override-track",
+        callback_url="http://backend:8000/api/internal/lyrics-sync/callback",
+        manual=False,
+        mp3_path=mp3_path,
+        lyrics_path=lyrics_path,
+    )
+    job.status = "completed"
+    job.lyrics_lrc = "[00:01.00]override line"
+    job.quality = "good"
+
+    ok = await aj._deliver_callback(job)
+    assert ok is True
+    assert posted_urls == ["https://www.freemusiers.fm/api/internal/lyrics-sync/callback"]
+    assert job.callback_status == aj.CALLBACK_DELIVERED

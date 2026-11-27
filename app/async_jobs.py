@@ -358,8 +358,16 @@ def _finish_job(job: SyncJob) -> None:
     _unregister_job(job.job_id)
 
 
+def _resolve_callback_url(job_callback_url: str) -> str:
+    override = os.environ.get("LYRIC_SYNC_CALLBACK_URL_OVERRIDE", "").strip()
+    if override:
+        return override
+    return (job_callback_url or "").strip()
+
+
 async def _deliver_callback(job: SyncJob) -> bool:
-    if not job.callback_url:
+    target_url = _resolve_callback_url(job.callback_url)
+    if not target_url:
         logger.warning("[async] job=%s missing callback_url — skipping webhook", job.job_id)
         job.callback_status = CALLBACK_DELIVERED
         job.delivered_at = job.delivered_at or time.time()
@@ -390,13 +398,14 @@ async def _deliver_callback(job: SyncJob) -> bool:
         _save_job(job)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(job.callback_url, json=payload, headers=headers)
+                response = await client.post(target_url, json=payload, headers=headers)
                 if 200 <= response.status_code < 300:
                     logger.info(
-                        "[async] job=%s callback_delivered attempt=%s status=%s",
+                        "[async] job=%s callback_delivered attempt=%s status=%s url=%s",
                         job.job_id,
                         attempt,
                         response.status_code,
+                        target_url,
                     )
                     job.callback_status = CALLBACK_DELIVERED
                     job.delivered_at = job.delivered_at or time.time()
@@ -410,19 +419,21 @@ async def _deliver_callback(job: SyncJob) -> bool:
         job.callback_last_error = last_error
         _save_job(job)
         logger.warning(
-            "[async] job=%s callback_failed attempt=%s/%s error=%s",
+            "[async] job=%s callback_failed attempt=%s/%s url=%s error=%s",
             job.job_id,
             attempt,
             CALLBACK_RETRIES,
+            target_url,
             last_error,
         )
         if attempt < CALLBACK_RETRIES:
             await asyncio.sleep(min(30.0, 2.0 ** attempt) + random.uniform(0.0, 1.0))
 
     logger.error(
-        "[async] job=%s callback_exhausted track=%s error=%s",
+        "[async] job=%s callback_exhausted track=%s url=%s error=%s",
         job.job_id,
         job.track_id,
+        target_url,
         last_error,
     )
     job.callback_status = CALLBACK_PENDING
